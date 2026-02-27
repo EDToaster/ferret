@@ -116,12 +116,10 @@ impl TrigramIndexReader {
             let mut max_file_len = 0u32;
             for i in 0..trigram_count as usize {
                 let entry_start = table_offset + i * TABLE_ENTRY_SIZE;
-                let flo = u32::from_le_bytes(
-                    mmap[entry_start + 3..entry_start + 7].try_into().unwrap(),
-                );
-                let fll = u32::from_le_bytes(
-                    mmap[entry_start + 7..entry_start + 11].try_into().unwrap(),
-                );
+                let flo =
+                    u32::from_le_bytes(mmap[entry_start + 3..entry_start + 7].try_into().unwrap());
+                let fll =
+                    u32::from_le_bytes(mmap[entry_start + 7..entry_start + 11].try_into().unwrap());
                 if flo >= max_file_offset {
                     max_file_offset = flo;
                     max_file_len = fll;
@@ -172,10 +170,14 @@ impl TrigramIndexReader {
 
         let entry_start = self.table_offset + idx * TABLE_ENTRY_SIZE;
         let file_list_offset = u32::from_le_bytes(
-            self.mmap[entry_start + 3..entry_start + 7].try_into().unwrap(),
+            self.mmap[entry_start + 3..entry_start + 7]
+                .try_into()
+                .unwrap(),
         ) as usize;
         let file_list_len = u32::from_le_bytes(
-            self.mmap[entry_start + 7..entry_start + 11].try_into().unwrap(),
+            self.mmap[entry_start + 7..entry_start + 11]
+                .try_into()
+                .unwrap(),
         );
 
         if file_list_len == 0 {
@@ -223,10 +225,14 @@ impl TrigramIndexReader {
 
         let entry_start = self.table_offset + idx * TABLE_ENTRY_SIZE;
         let pos_list_offset = u32::from_le_bytes(
-            self.mmap[entry_start + 11..entry_start + 15].try_into().unwrap(),
+            self.mmap[entry_start + 11..entry_start + 15]
+                .try_into()
+                .unwrap(),
         ) as usize;
         let pos_list_len = u32::from_le_bytes(
-            self.mmap[entry_start + 15..entry_start + 19].try_into().unwrap(),
+            self.mmap[entry_start + 15..entry_start + 19]
+                .try_into()
+                .unwrap(),
         );
 
         if pos_list_len == 0 {
@@ -382,10 +388,7 @@ mod tests {
         let positions = reader
             .lookup_positions(Trigram::from_bytes(b'f', b'n', b' '))
             .unwrap();
-        assert_eq!(
-            positions,
-            vec![(FileId(0), 0), (FileId(1), 0)]
-        );
+        assert_eq!(positions, vec![(FileId(0), 0), (FileId(1), 0)]);
     }
 
     #[test]

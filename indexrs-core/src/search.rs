@@ -120,7 +120,10 @@ mod tests {
         };
         assert_eq!(line.line_number, 10);
         assert_eq!(line.ranges.len(), 2);
-        assert_eq!(&line.content[line.ranges[0].0..line.ranges[0].1], "parse_query");
+        assert_eq!(
+            &line.content[line.ranges[0].0..line.ranges[0].1],
+            "parse_query"
+        );
         assert_eq!(&line.content[line.ranges[1].0..line.ranges[1].1], "Query");
     }
 
@@ -140,13 +143,11 @@ mod tests {
             file_id: FileId(42),
             path: PathBuf::from("src/types.rs"),
             language: Language::Rust,
-            lines: vec![
-                LineMatch {
-                    line_number: 5,
-                    content: "pub struct FileId(u32);".to_string(),
-                    ranges: vec![(11, 17)],
-                },
-            ],
+            lines: vec![LineMatch {
+                line_number: 5,
+                content: "pub struct FileId(u32);".to_string(),
+                ranges: vec![(11, 17)],
+            }],
             score: 0.92,
         };
         assert_eq!(file_match.file_id, FileId(42));

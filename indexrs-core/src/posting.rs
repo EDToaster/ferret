@@ -57,10 +57,7 @@ impl PostingListBuilder {
     /// call [`finalize`](Self::finalize) to deduplicate and sort.
     pub fn add_file(&mut self, file_id: FileId, content: &[u8]) {
         for (offset, trigram) in extract_trigrams(content).enumerate() {
-            self.file_postings
-                .entry(trigram)
-                .or_default()
-                .push(file_id);
+            self.file_postings.entry(trigram).or_default().push(file_id);
             self.positional_postings
                 .entry(trigram)
                 .or_default()
@@ -162,60 +159,21 @@ mod tests {
         );
 
         // File 0 only trigrams: "n m", " ma", "mai", "ain", "in(", "n()"
-        assert_eq!(
-            fp[&Trigram::from_bytes(b'n', b' ', b'm')],
-            vec![FileId(0)]
-        );
-        assert_eq!(
-            fp[&Trigram::from_bytes(b' ', b'm', b'a')],
-            vec![FileId(0)]
-        );
-        assert_eq!(
-            fp[&Trigram::from_bytes(b'm', b'a', b'i')],
-            vec![FileId(0)]
-        );
-        assert_eq!(
-            fp[&Trigram::from_bytes(b'a', b'i', b'n')],
-            vec![FileId(0)]
-        );
-        assert_eq!(
-            fp[&Trigram::from_bytes(b'i', b'n', b'(')],
-            vec![FileId(0)]
-        );
-        assert_eq!(
-            fp[&Trigram::from_bytes(b'n', b'(', b')')],
-            vec![FileId(0)]
-        );
+        assert_eq!(fp[&Trigram::from_bytes(b'n', b' ', b'm')], vec![FileId(0)]);
+        assert_eq!(fp[&Trigram::from_bytes(b' ', b'm', b'a')], vec![FileId(0)]);
+        assert_eq!(fp[&Trigram::from_bytes(b'm', b'a', b'i')], vec![FileId(0)]);
+        assert_eq!(fp[&Trigram::from_bytes(b'a', b'i', b'n')], vec![FileId(0)]);
+        assert_eq!(fp[&Trigram::from_bytes(b'i', b'n', b'(')], vec![FileId(0)]);
+        assert_eq!(fp[&Trigram::from_bytes(b'n', b'(', b')')], vec![FileId(0)]);
 
         // File 1 only trigrams: "n p", " pa", "par", "ars", "rse", "se(", "e()"
-        assert_eq!(
-            fp[&Trigram::from_bytes(b'n', b' ', b'p')],
-            vec![FileId(1)]
-        );
-        assert_eq!(
-            fp[&Trigram::from_bytes(b' ', b'p', b'a')],
-            vec![FileId(1)]
-        );
-        assert_eq!(
-            fp[&Trigram::from_bytes(b'p', b'a', b'r')],
-            vec![FileId(1)]
-        );
-        assert_eq!(
-            fp[&Trigram::from_bytes(b'a', b'r', b's')],
-            vec![FileId(1)]
-        );
-        assert_eq!(
-            fp[&Trigram::from_bytes(b'r', b's', b'e')],
-            vec![FileId(1)]
-        );
-        assert_eq!(
-            fp[&Trigram::from_bytes(b's', b'e', b'(')],
-            vec![FileId(1)]
-        );
-        assert_eq!(
-            fp[&Trigram::from_bytes(b'e', b'(', b')')],
-            vec![FileId(1)]
-        );
+        assert_eq!(fp[&Trigram::from_bytes(b'n', b' ', b'p')], vec![FileId(1)]);
+        assert_eq!(fp[&Trigram::from_bytes(b' ', b'p', b'a')], vec![FileId(1)]);
+        assert_eq!(fp[&Trigram::from_bytes(b'p', b'a', b'r')], vec![FileId(1)]);
+        assert_eq!(fp[&Trigram::from_bytes(b'a', b'r', b's')], vec![FileId(1)]);
+        assert_eq!(fp[&Trigram::from_bytes(b'r', b's', b'e')], vec![FileId(1)]);
+        assert_eq!(fp[&Trigram::from_bytes(b's', b'e', b'(')], vec![FileId(1)]);
+        assert_eq!(fp[&Trigram::from_bytes(b'e', b'(', b')')], vec![FileId(1)]);
     }
 
     #[test]
@@ -377,10 +335,7 @@ mod tests {
 
         let fp = builder.file_postings();
         // File-level posting should be deduplicated
-        assert_eq!(
-            fp[&Trigram::from_bytes(b'a', b'b', b'c')],
-            vec![FileId(0)]
-        );
+        assert_eq!(fp[&Trigram::from_bytes(b'a', b'b', b'c')], vec![FileId(0)]);
 
         let pp = builder.positional_postings();
         // Positional postings record both occurrences (both at offset 0)

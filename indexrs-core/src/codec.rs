@@ -53,7 +53,8 @@ pub fn encode_delta_varint(values: &[u32]) -> Vec<u8> {
 
     for &val in values {
         let delta = val - prev;
-        buf.write_varint(delta).expect("write to Vec<u8> cannot fail");
+        buf.write_varint(delta)
+            .expect("write to Vec<u8> cannot fail");
         prev = val;
     }
 
@@ -157,17 +158,20 @@ pub fn encode_positional_postings(postings: &[(u32, u32)]) -> Vec<u8> {
         let count = group_end - group_start;
 
         // Write file_id
-        buf.write_varint(file_id).expect("write to Vec<u8> cannot fail");
+        buf.write_varint(file_id)
+            .expect("write to Vec<u8> cannot fail");
 
         // Write offset count
-        buf.write_varint(count as u32).expect("write to Vec<u8> cannot fail");
+        buf.write_varint(count as u32)
+            .expect("write to Vec<u8> cannot fail");
 
         // Write delta-encoded offsets
         let mut prev_offset = 0u32;
         for posting in &postings[group_start..group_end] {
             let offset = posting.1;
             let delta = offset - prev_offset;
-            buf.write_varint(delta).expect("write to Vec<u8> cannot fail");
+            buf.write_varint(delta)
+                .expect("write to Vec<u8> cannot fail");
             prev_offset = offset;
         }
     }

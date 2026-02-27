@@ -28,7 +28,7 @@ use std::time::Duration;
 use ignore::gitignore::Gitignore;
 use notify_debouncer_full::notify::event::{EventKind, ModifyKind, RenameMode};
 use notify_debouncer_full::notify::{RecommendedWatcher, RecursiveMode};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 
 use crate::changes::{ChangeEvent, ChangeKind};
 use crate::error::{IndexError, Result};
@@ -166,8 +166,7 @@ fn classify_event_kind(kind: &EventKind) -> Option<ChangeKind> {
 
 /// Returns `true` if any component of `path` equals `component`.
 fn path_has_component(path: &Path, component: &str) -> bool {
-    path.components()
-        .any(|c| c.as_os_str() == component)
+    path.components().any(|c| c.as_os_str() == component)
 }
 
 // ---------------------------------------------------------------------------

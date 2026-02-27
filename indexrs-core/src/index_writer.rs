@@ -137,10 +137,7 @@ impl TrigramIndexWriter {
 
         // Write to temp file, then atomic rename for crash safety
         let parent = path.parent().unwrap_or(Path::new("."));
-        let temp_path = parent.join(format!(
-            ".trigrams.bin.tmp.{}",
-            std::process::id()
-        ));
+        let temp_path = parent.join(format!(".trigrams.bin.tmp.{}", std::process::id()));
 
         fs::write(&temp_path, &buf)?;
         fs::rename(&temp_path, path)?;
@@ -202,8 +199,7 @@ mod tests {
         TrigramIndexWriter::write(&builder, &path).unwrap();
         let data = std::fs::read(&path).unwrap();
 
-        let trigram_count =
-            u32::from_le_bytes(data[6..10].try_into().unwrap()) as usize;
+        let trigram_count = u32::from_le_bytes(data[6..10].try_into().unwrap()) as usize;
 
         // Verify trigrams in the table are sorted by u32 value
         let mut prev_val = 0u32;

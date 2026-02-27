@@ -577,7 +577,11 @@ mod tests {
         ];
         for (lang, expected_u16) in new_languages {
             assert_eq!(lang.to_u16(), expected_u16, "{lang} to_u16");
-            assert_eq!(Language::from_u16(expected_u16), lang, "from_u16({expected_u16})");
+            assert_eq!(
+                Language::from_u16(expected_u16),
+                lang,
+                "from_u16({expected_u16})"
+            );
         }
     }
 
@@ -698,19 +702,37 @@ mod tests {
     fn test_from_path() {
         use std::path::Path;
 
-        assert_eq!(Language::from_path(Path::new("src/main.rs")), Language::Rust);
+        assert_eq!(
+            Language::from_path(Path::new("src/main.rs")),
+            Language::Rust
+        );
         assert_eq!(Language::from_path(Path::new("lib.py")), Language::Python);
-        assert_eq!(Language::from_path(Path::new("deep/nested/app.tsx")), Language::TypeScript);
+        assert_eq!(
+            Language::from_path(Path::new("deep/nested/app.tsx")),
+            Language::TypeScript
+        );
         assert_eq!(Language::from_path(Path::new("config.yml")), Language::Yaml);
         assert_eq!(Language::from_path(Path::new("Cargo.toml")), Language::Toml);
         assert_eq!(Language::from_path(Path::new("data.json")), Language::Json);
-        assert_eq!(Language::from_path(Path::new("schema.proto")), Language::Protobuf);
+        assert_eq!(
+            Language::from_path(Path::new("schema.proto")),
+            Language::Protobuf
+        );
         assert_eq!(Language::from_path(Path::new("main.tf")), Language::Hcl);
         assert_eq!(Language::from_path(Path::new("App.kt")), Language::Kotlin);
-        assert_eq!(Language::from_path(Path::new("main.swift")), Language::Swift);
-        assert_eq!(Language::from_path(Path::new("Main.scala")), Language::Scala);
+        assert_eq!(
+            Language::from_path(Path::new("main.swift")),
+            Language::Swift
+        );
+        assert_eq!(
+            Language::from_path(Path::new("Main.scala")),
+            Language::Scala
+        );
         assert_eq!(Language::from_path(Path::new("app.ex")), Language::Elixir);
-        assert_eq!(Language::from_path(Path::new("server.erl")), Language::Erlang);
+        assert_eq!(
+            Language::from_path(Path::new("server.erl")),
+            Language::Erlang
+        );
         assert_eq!(Language::from_path(Path::new("Main.hs")), Language::Haskell);
         assert_eq!(Language::from_path(Path::new("parser.ml")), Language::OCaml);
         assert_eq!(Language::from_path(Path::new("script.lua")), Language::Lua);
@@ -726,7 +748,10 @@ mod tests {
         use std::path::Path;
 
         // Files with no extension default to Unknown
-        assert_eq!(Language::from_path(Path::new("Makefile")), Language::Unknown);
+        assert_eq!(
+            Language::from_path(Path::new("Makefile")),
+            Language::Unknown
+        );
         assert_eq!(Language::from_path(Path::new("LICENSE")), Language::Unknown);
     }
 
@@ -735,9 +760,18 @@ mod tests {
         use std::path::Path;
 
         // Dockerfile detected by filename, not extension
-        assert_eq!(Language::from_path(Path::new("Dockerfile")), Language::Dockerfile);
-        assert_eq!(Language::from_path(Path::new("path/to/Dockerfile")), Language::Dockerfile);
-        assert_eq!(Language::from_path(Path::new("Dockerfile.prod")), Language::Dockerfile);
+        assert_eq!(
+            Language::from_path(Path::new("Dockerfile")),
+            Language::Dockerfile
+        );
+        assert_eq!(
+            Language::from_path(Path::new("path/to/Dockerfile")),
+            Language::Dockerfile
+        );
+        assert_eq!(
+            Language::from_path(Path::new("Dockerfile.prod")),
+            Language::Dockerfile
+        );
     }
 
     #[test]

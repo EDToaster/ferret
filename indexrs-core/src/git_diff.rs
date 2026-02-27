@@ -75,8 +75,7 @@ impl GitChangeDetector {
         }
 
         // 3. Untracked files.
-        let untracked =
-            self.run_git(&["ls-files", "--others", "--exclude-standard"])?;
+        let untracked = self.run_git(&["ls-files", "--others", "--exclude-standard"])?;
         for event in parse_untracked(&untracked) {
             changes.insert(event.path, event.kind);
         }
@@ -102,9 +101,7 @@ impl GitChangeDetector {
             .args(args)
             .current_dir(&self.repo_root)
             .output()
-            .map_err(|e| {
-                IndexError::Git(format!("failed to execute git: {e}"))
-            })?;
+            .map_err(|e| IndexError::Git(format!("failed to execute git: {e}")))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -116,9 +113,8 @@ impl GitChangeDetector {
             )));
         }
 
-        String::from_utf8(output.stdout).map_err(|e| {
-            IndexError::Git(format!("git output was not valid UTF-8: {e}"))
-        })
+        String::from_utf8(output.stdout)
+            .map_err(|e| IndexError::Git(format!("git output was not valid UTF-8: {e}")))
     }
 }
 
@@ -363,7 +359,9 @@ mod tests {
         // state, so we just check it doesn't error).
         let repo_root = find_repo_root();
         let detector = GitChangeDetector::new(repo_root);
-        let events = detector.detect_changes().expect("detect_changes should succeed");
+        let events = detector
+            .detect_changes()
+            .expect("detect_changes should succeed");
 
         // The result is a Vec — it may be empty if the tree is pristine,
         // but the call itself must not fail.

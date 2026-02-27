@@ -182,10 +182,7 @@ mod tests {
 
     #[test]
     fn test_intersect_no_overlap() {
-        let lists = vec![
-            vec![FileId(0), FileId(1)],
-            vec![FileId(2), FileId(3)],
-        ];
+        let lists = vec![vec![FileId(0), FileId(1)], vec![FileId(2), FileId(3)]];
         let result = intersect_file_ids(&lists);
         assert!(result.is_empty());
     }
@@ -206,10 +203,7 @@ mod tests {
 
     #[test]
     fn test_intersect_one_empty_list() {
-        let lists = vec![
-            vec![FileId(0), FileId(1)],
-            vec![],
-        ];
+        let lists = vec![vec![FileId(0), FileId(1)], vec![]];
         let result = intersect_file_ids(&lists);
         assert!(result.is_empty());
     }

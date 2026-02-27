@@ -106,7 +106,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        eprintln!("\n{} matches in {} candidate files", match_count, candidates.len());
+        eprintln!(
+            "\n{} matches in {} candidate files",
+            match_count,
+            candidates.len()
+        );
     }
 
     // Cleanup

@@ -100,16 +100,16 @@ mod tests {
         assert_eq!(trigrams.len(), 10);
 
         let expected = vec![
-            Trigram::from_bytes(b'f', b'n', b' '),     // offset 0: "fn "
-            Trigram::from_bytes(b'n', b' ', b'm'),      // offset 1: "n m"
-            Trigram::from_bytes(b' ', b'm', b'a'),      // offset 2: " ma"
-            Trigram::from_bytes(b'm', b'a', b'i'),      // offset 3: "mai"
-            Trigram::from_bytes(b'a', b'i', b'n'),      // offset 4: "ain"
-            Trigram::from_bytes(b'i', b'n', b'('),      // offset 5: "in("
-            Trigram::from_bytes(b'n', b'(', b')'),      // offset 6: "n()"
-            Trigram::from_bytes(b'(', b')', b' '),      // offset 7: "() "
-            Trigram::from_bytes(b')', b' ', b'{'),      // offset 8: ") {"
-            Trigram::from_bytes(b' ', b'{', b'}'),      // offset 9: " {}"
+            Trigram::from_bytes(b'f', b'n', b' '), // offset 0: "fn "
+            Trigram::from_bytes(b'n', b' ', b'm'), // offset 1: "n m"
+            Trigram::from_bytes(b' ', b'm', b'a'), // offset 2: " ma"
+            Trigram::from_bytes(b'm', b'a', b'i'), // offset 3: "mai"
+            Trigram::from_bytes(b'a', b'i', b'n'), // offset 4: "ain"
+            Trigram::from_bytes(b'i', b'n', b'('), // offset 5: "in("
+            Trigram::from_bytes(b'n', b'(', b')'), // offset 6: "n()"
+            Trigram::from_bytes(b'(', b')', b' '), // offset 7: "() "
+            Trigram::from_bytes(b')', b' ', b'{'), // offset 8: ") {"
+            Trigram::from_bytes(b' ', b'{', b'}'), // offset 9: " {}"
         ];
 
         assert_eq!(trigrams, expected);

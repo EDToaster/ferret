@@ -85,8 +85,8 @@ impl ContentStoreWriter {
     /// and the length of the compressed block. These values are stored in the
     /// metadata index for later retrieval via [`ContentStoreReader::read_content`].
     pub fn add_content(&mut self, content: &[u8]) -> std::io::Result<(u64, u32)> {
-        let compressed = zstd::bulk::compress(content, ZSTD_COMPRESSION_LEVEL)
-            .map_err(std::io::Error::other)?;
+        let compressed =
+            zstd::bulk::compress(content, ZSTD_COMPRESSION_LEVEL).map_err(std::io::Error::other)?;
 
         let offset = self.current_offset;
         let compressed_len = compressed.len() as u32;
@@ -159,9 +159,8 @@ impl ContentStoreReader {
         }
 
         let compressed = &self.mmap[start..end];
-        zstd::stream::decode_all(compressed).map_err(|e| {
-            IndexError::IndexCorruption(format!("zstd decompression failed: {e}"))
-        })
+        zstd::stream::decode_all(compressed)
+            .map_err(|e| IndexError::IndexCorruption(format!("zstd decompression failed: {e}")))
     }
 }
 
@@ -215,7 +214,8 @@ mod tests {
             let (offset, len) = positions[i];
             let result = reader.read_content(offset, len).unwrap();
             assert_eq!(
-                &result, original,
+                &result,
+                original,
                 "content mismatch for file {i}: expected {} bytes, got {} bytes",
                 original.len(),
                 result.len()
@@ -238,7 +238,11 @@ mod tests {
         let reader = ContentStoreReader::open(&path).unwrap();
         let (offset, len) = positions[0];
         let result = reader.read_content(offset, len).unwrap();
-        assert!(result.is_empty(), "expected empty content, got {} bytes", result.len());
+        assert!(
+            result.is_empty(),
+            "expected empty content, got {} bytes",
+            result.len()
+        );
     }
 
     #[test]
@@ -247,7 +251,8 @@ mod tests {
 
         // Generate ~1MB of realistic-looking source code content
         let mut large_content = Vec::with_capacity(1_048_576);
-        let line = b"    let result = some_function(arg1, arg2, arg3).map_err(|e| Error::from(e))?;\n";
+        let line =
+            b"    let result = some_function(arg1, arg2, arg3).map_err(|e| Error::from(e))?;\n";
         while large_content.len() < 1_048_576 {
             large_content.extend_from_slice(line);
         }

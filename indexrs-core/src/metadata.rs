@@ -101,8 +101,7 @@ impl MetadataBuilder {
     /// assigning sequential IDs via [`next_file_id`](MetadataBuilder::next_file_id).
     pub fn add_file(&mut self, metadata: FileMetadata) {
         let index = self.entries.len();
-        self.path_to_index
-            .insert(metadata.path.clone(), index);
+        self.path_to_index.insert(metadata.path.clone(), index);
         if metadata.file_id.0 >= self.next_file_id {
             self.next_file_id = metadata.file_id.0 + 1;
         }
@@ -128,9 +127,7 @@ impl MetadataBuilder {
     ///
     /// Returns `None` if no entry with the given path exists.
     pub fn get_by_path(&self, path: &str) -> Option<&FileMetadata> {
-        self.path_to_index
-            .get(path)
-            .map(|&idx| &self.entries[idx])
+        self.path_to_index.get(path).map(|&idx| &self.entries[idx])
     }
 
     /// Return the number of file entries in the index.
@@ -279,9 +276,8 @@ impl<'a> MetadataReader<'a> {
         let mut content_hash = [0u8; 16];
         content_hash.copy_from_slice(&entry_data[12..28]);
 
-        let language = Language::from_u16(u16::from_le_bytes(
-            entry_data[28..30].try_into().unwrap(),
-        ));
+        let language =
+            Language::from_u16(u16::from_le_bytes(entry_data[28..30].try_into().unwrap()));
         let size_bytes = u32::from_le_bytes(entry_data[30..34].try_into().unwrap());
         let mtime_epoch_secs = u64::from_le_bytes(entry_data[34..42].try_into().unwrap());
         let line_count = u32::from_le_bytes(entry_data[42..46].try_into().unwrap());
@@ -316,8 +312,8 @@ mod tests {
             file_id: FileId(id),
             path: path.to_string(),
             content_hash: [
-                id as u8, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B,
-                0x0C, 0x0D, 0x0E, 0x0F,
+                id as u8, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C,
+                0x0D, 0x0E, 0x0F,
             ],
             language: lang,
             size_bytes: 1000 + id,
@@ -444,8 +440,7 @@ mod tests {
         assert_eq!(expected_meta_size, 10 + 3 * 58);
 
         // paths.bin should contain all path strings concatenated
-        let expected_paths_len =
-            "src/main.rs".len() + "src/lib.rs".len() + "README.md".len();
+        let expected_paths_len = "src/main.rs".len() + "src/lib.rs".len() + "README.md".len();
         assert_eq!(paths_buf.len(), expected_paths_len);
     }
 
@@ -662,7 +657,10 @@ mod tests {
 
         for (i, &expected_lang) in languages.iter().enumerate() {
             let entry = reader.get(FileId(i as u32)).unwrap();
-            assert_eq!(entry.language, expected_lang, "language mismatch at index {i}");
+            assert_eq!(
+                entry.language, expected_lang,
+                "language mismatch at index {i}"
+            );
         }
     }
 

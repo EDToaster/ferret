@@ -14,20 +14,14 @@ pub const DEFAULT_MAX_FILE_SIZE: u64 = 1_048_576;
 /// Known binary file extensions (lowercase, without leading dot).
 const BINARY_EXTENSIONS: &[&str] = &[
     // Images
-    "png", "jpg", "jpeg", "gif", "bmp", "ico", "svg",
-    // Compiled / object files
+    "png", "jpg", "jpeg", "gif", "bmp", "ico", "svg", // Compiled / object files
     "wasm", "o", "obj", "a", "lib", "so", "dylib", "dll", "exe", "bin", "class",
     // Archives
-    "jar", "zip", "gz", "tar", "7z", "rar",
-    // Documents
-    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-    // Media
-    "mp3", "mp4", "wav", "avi", "mov",
-    // Fonts
-    "ttf", "otf", "woff", "woff2", "eot",
-    // Python bytecode
-    "pyc", "pyo",
-    // macOS metadata
+    "jar", "zip", "gz", "tar", "7z", "rar", // Documents
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", // Media
+    "mp3", "mp4", "wav", "avi", "mov", // Fonts
+    "ttf", "otf", "woff", "woff2", "eot", // Python bytecode
+    "pyc", "pyo", // macOS metadata
     "DS_Store",
 ];
 
@@ -128,9 +122,7 @@ mod tests {
 
     #[test]
     fn known_binary_extensions_detected() {
-        for ext in &[
-            "png", "jpg", "exe", "zip", "pdf", "wasm", "pyc", "DS_Store",
-        ] {
+        for ext in &["png", "jpg", "exe", "zip", "pdf", "wasm", "pyc", "DS_Store"] {
             assert!(is_binary_extension(ext), "{ext} should be binary");
         }
     }

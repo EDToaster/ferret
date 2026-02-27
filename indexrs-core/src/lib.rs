@@ -17,8 +17,8 @@ pub mod walker;
 pub mod watcher;
 
 pub use binary::{
-    is_binary_content, is_binary_extension, is_binary_path, should_index_file,
-    DEFAULT_MAX_FILE_SIZE,
+    DEFAULT_MAX_FILE_SIZE, is_binary_content, is_binary_extension, is_binary_path,
+    should_index_file,
 };
 pub use changes::{ChangeEvent, ChangeKind};
 pub use codec::{
