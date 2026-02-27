@@ -106,13 +106,14 @@ impl HybridDetector {
                         }
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
-                        // Watcher channel closed — trigger a git diff scan
-                        // as fallback.
+                        // Watcher channel closed — do one final git scan, then exit
+                        // to avoid hammering git in a tight loop.
                         if let Ok(events) = git.detect_changes()
                             && !events.is_empty()
                         {
                             let _ = tx.send(dedup_events(events));
                         }
+                        break;
                     }
                     Err(mpsc::TryRecvError::Empty) => {}
                 }

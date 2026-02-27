@@ -152,7 +152,12 @@ impl MetadataBuilder {
         // Write header
         meta_writer.write_all(&META_MAGIC.to_le_bytes())?;
         meta_writer.write_all(&META_VERSION.to_le_bytes())?;
-        let entry_count = self.entries.len() as u32;
+        let entry_count: u32 = self.entries.len().try_into().map_err(|_| {
+            std::io::Error::other(format!(
+                "entry count {} exceeds u32::MAX",
+                self.entries.len()
+            ))
+        })?;
         meta_writer.write_all(&entry_count.to_le_bytes())?;
 
         // Track path pool offset
@@ -161,7 +166,9 @@ impl MetadataBuilder {
         // Write entries
         for entry in &self.entries {
             let path_bytes = entry.path.as_bytes();
-            let path_len = path_bytes.len() as u32;
+            let path_len: u32 = path_bytes.len().try_into().map_err(|_| {
+                std::io::Error::other(format!("path too long for u32: {}", entry.path))
+            })?;
 
             meta_writer.write_all(&entry.file_id.0.to_le_bytes())?;
             meta_writer.write_all(&path_offset.to_le_bytes())?;

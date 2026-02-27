@@ -57,6 +57,10 @@ impl PostingListBuilder {
     /// call [`finalize`](Self::finalize) to deduplicate and sort.
     pub fn add_file(&mut self, file_id: FileId, content: &[u8]) {
         for (offset, trigram) in extract_trigrams(content).enumerate() {
+            debug_assert!(
+                offset <= u32::MAX as usize,
+                "file content too large for u32 offset: {offset}"
+            );
             self.file_postings.entry(trigram).or_default().push(file_id);
             self.positional_postings
                 .entry(trigram)

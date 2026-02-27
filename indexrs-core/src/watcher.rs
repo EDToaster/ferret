@@ -78,6 +78,7 @@ impl FileWatcher {
     pub fn start(&mut self) -> Result<mpsc::Receiver<Vec<ChangeEvent>>> {
         let (tx, rx) = mpsc::channel();
         let gitignore = self.gitignore.clone();
+        let root = self.root.clone();
 
         let mut debouncer = new_debouncer(
             DEBOUNCE_TIMEOUT,
@@ -109,8 +110,12 @@ impl FileWatcher {
                                 return None;
                             }
 
+                            // Strip the root prefix to emit relative paths,
+                            // matching git_diff.rs which emits repo-relative paths.
+                            let relative_path = path.strip_prefix(&root).unwrap_or(path);
+
                             Some(ChangeEvent {
-                                path: path.clone(),
+                                path: relative_path.to_path_buf(),
                                 kind,
                             })
                         })

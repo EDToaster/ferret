@@ -42,7 +42,15 @@ impl GitChangeDetector {
     ///
     /// Subsequent calls to [`detect_changes`](Self::detect_changes) will use
     /// this as the baseline for `git diff`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `sha` is not a valid hex string of at least 7 characters.
     pub fn set_last_indexed_commit(&mut self, sha: String) {
+        assert!(
+            sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()),
+            "set_last_indexed_commit expects a hex SHA (>= 7 chars), got: {sha}"
+        );
         self.last_indexed_commit = Some(sha);
     }
 
@@ -141,28 +149,46 @@ fn parse_name_status(output: &str) -> Vec<ChangeEvent> {
         }
 
         let status = parts[0];
+
+        // Renames and copies have two paths: old and new.
+        // Emit a Deleted event for the old path and a Created event for the new path,
+        // so the indexer removes the stale entry and indexes the new one.
+        if status.starts_with('R') && parts.len() >= 3 {
+            events.push(ChangeEvent {
+                path: PathBuf::from(parts[1]),
+                kind: ChangeKind::Deleted,
+            });
+            events.push(ChangeEvent {
+                path: PathBuf::from(parts[2]),
+                kind: ChangeKind::Created,
+            });
+            continue;
+        }
+
+        if status.starts_with('C') && parts.len() >= 3 {
+            // Copy: original still exists, new copy needs indexing.
+            events.push(ChangeEvent {
+                path: PathBuf::from(parts[2]),
+                kind: ChangeKind::Created,
+            });
+            continue;
+        }
+
         let kind = if status == "A" {
             ChangeKind::Created
         } else if status == "M" {
             ChangeKind::Modified
         } else if status == "D" {
             ChangeKind::Deleted
-        } else if status.starts_with('R') {
-            ChangeKind::Renamed
         } else {
-            // Unknown status code (e.g. C for copy) — treat as Modified.
+            // Unknown status code — treat as Modified.
             ChangeKind::Modified
         };
 
-        // For renames the destination path is in parts[2]; for everything
-        // else the path is in parts[1].
-        let path = if status.starts_with('R') && parts.len() >= 3 {
-            PathBuf::from(parts[2])
-        } else {
-            PathBuf::from(parts[1])
-        };
-
-        events.push(ChangeEvent { path, kind });
+        events.push(ChangeEvent {
+            path: PathBuf::from(parts[1]),
+            kind,
+        });
     }
 
     events
@@ -223,25 +249,31 @@ mod tests {
     fn test_parse_name_status_renamed() {
         let output = "R100\told.rs\tnew.rs\n";
         let events = parse_name_status(output);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].path, PathBuf::from("new.rs"));
-        assert_eq!(events[0].kind, ChangeKind::Renamed);
+        // Renames emit two events: Delete old + Create new.
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].path, PathBuf::from("old.rs"));
+        assert_eq!(events[0].kind, ChangeKind::Deleted);
+        assert_eq!(events[1].path, PathBuf::from("new.rs"));
+        assert_eq!(events[1].kind, ChangeKind::Created);
     }
 
     #[test]
     fn test_parse_name_status_renamed_partial_score() {
         let output = "R075\tsrc/foo.rs\tsrc/bar.rs\n";
         let events = parse_name_status(output);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].path, PathBuf::from("src/bar.rs"));
-        assert_eq!(events[0].kind, ChangeKind::Renamed);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].path, PathBuf::from("src/foo.rs"));
+        assert_eq!(events[0].kind, ChangeKind::Deleted);
+        assert_eq!(events[1].path, PathBuf::from("src/bar.rs"));
+        assert_eq!(events[1].kind, ChangeKind::Created);
     }
 
     #[test]
     fn test_parse_name_status_mixed() {
         let output = "A\tnew.rs\nM\texisting.rs\nD\tremoved.rs\nR100\told.rs\trenamed.rs\n";
         let events = parse_name_status(output);
-        assert_eq!(events.len(), 4);
+        // 3 normal events + 2 for rename (Delete old + Create new) = 5
+        assert_eq!(events.len(), 5);
 
         assert_eq!(events[0].kind, ChangeKind::Created);
         assert_eq!(events[0].path, PathBuf::from("new.rs"));
@@ -252,8 +284,11 @@ mod tests {
         assert_eq!(events[2].kind, ChangeKind::Deleted);
         assert_eq!(events[2].path, PathBuf::from("removed.rs"));
 
-        assert_eq!(events[3].kind, ChangeKind::Renamed);
-        assert_eq!(events[3].path, PathBuf::from("renamed.rs"));
+        assert_eq!(events[3].kind, ChangeKind::Deleted);
+        assert_eq!(events[3].path, PathBuf::from("old.rs"));
+
+        assert_eq!(events[4].kind, ChangeKind::Created);
+        assert_eq!(events[4].path, PathBuf::from("renamed.rs"));
     }
 
     #[test]
@@ -270,14 +305,13 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_name_status_unknown_status_treated_as_modified() {
-        // 'C' (copy) is uncommon but valid — we map it to Modified.
+    fn test_parse_name_status_copy_indexes_new_path() {
+        // 'C' (copy) should emit a Created event for the new copy path.
         let output = "C100\toriginal.rs\tcopy.rs\n";
         let events = parse_name_status(output);
         assert_eq!(events.len(), 1);
-        // Not a rename, so path comes from parts[1].
-        assert_eq!(events[0].path, PathBuf::from("original.rs"));
-        assert_eq!(events[0].kind, ChangeKind::Modified);
+        assert_eq!(events[0].path, PathBuf::from("copy.rs"));
+        assert_eq!(events[0].kind, ChangeKind::Created);
     }
 
     // ---- parse_untracked --------------------------------------------

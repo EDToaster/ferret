@@ -73,7 +73,10 @@ impl TrigramIndexWriter {
         let mut trigrams: Vec<Trigram> = builder.file_postings().keys().copied().collect();
         trigrams.sort_by_key(|t| t.to_u32());
 
-        let trigram_count = trigrams.len() as u32;
+        let trigram_count: u32 = trigrams
+            .len()
+            .try_into()
+            .map_err(|_| IndexError::IndexCorruption("trigram count exceeds u32::MAX".into()))?;
 
         // Encode all file posting lists, recording offsets and counts
         let mut file_postings_buf = Vec::new();
@@ -84,8 +87,12 @@ impl TrigramIndexWriter {
             let raw_ids: Vec<u32> = file_ids.iter().map(|fid| fid.0).collect();
             let encoded = encode_delta_varint(&raw_ids);
 
-            let offset = file_postings_buf.len() as u32;
-            let len = file_ids.len() as u32;
+            let offset: u32 = file_postings_buf.len().try_into().map_err(|_| {
+                IndexError::IndexCorruption("file posting offset exceeds u32::MAX".into())
+            })?;
+            let len: u32 = file_ids.len().try_into().map_err(|_| {
+                IndexError::IndexCorruption("file posting count exceeds u32::MAX".into())
+            })?;
             file_postings_buf.extend_from_slice(&encoded);
             file_posting_entries.push((offset, len));
         }
@@ -100,8 +107,12 @@ impl TrigramIndexWriter {
                 positions.iter().map(|(fid, off)| (fid.0, *off)).collect();
             let encoded = encode_positional_postings(&raw_positions);
 
-            let offset = pos_postings_buf.len() as u32;
-            let len = positions.len() as u32;
+            let offset: u32 = pos_postings_buf.len().try_into().map_err(|_| {
+                IndexError::IndexCorruption("positional posting offset exceeds u32::MAX".into())
+            })?;
+            let len: u32 = positions.len().try_into().map_err(|_| {
+                IndexError::IndexCorruption("positional posting count exceeds u32::MAX".into())
+            })?;
             pos_postings_buf.extend_from_slice(&encoded);
             pos_posting_entries.push((offset, len));
         }

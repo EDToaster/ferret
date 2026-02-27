@@ -96,7 +96,12 @@ impl ContentStoreWriter {
             zstd::bulk::compress(content, ZSTD_COMPRESSION_LEVEL).map_err(std::io::Error::other)?;
 
         let offset = self.current_offset;
-        let compressed_len = compressed.len() as u32;
+        let compressed_len: u32 = compressed.len().try_into().map_err(|_| {
+            std::io::Error::other(format!(
+                "compressed block size {} exceeds u32::MAX",
+                compressed.len()
+            ))
+        })?;
 
         self.writer.write_all(&compressed)?;
         self.current_offset += compressed_len as u64;
