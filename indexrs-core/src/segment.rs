@@ -21,6 +21,7 @@ use crate::index_reader::TrigramIndexReader;
 use crate::index_writer::TrigramIndexWriter;
 use crate::metadata::{FileMetadata, MetadataBuilder, MetadataReader};
 use crate::posting::PostingListBuilder;
+use crate::tombstone::TombstoneSet;
 use crate::types::{FileId, Language, SegmentId};
 
 /// An input file to be indexed into a segment.
@@ -149,6 +150,24 @@ impl Segment {
     pub fn get_metadata(&self, file_id: FileId) -> Result<Option<FileMetadata>, IndexError> {
         let reader = MetadataReader::new(&self.meta_mmap, &self.paths_mmap)?;
         reader.get(file_id)
+    }
+
+    /// Load the tombstone set for this segment from disk.
+    ///
+    /// Reads `tombstones.bin` from the segment directory. If the file is empty
+    /// (the initial state after segment creation), returns an empty `TombstoneSet`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IndexError::Io`] if the file cannot be read, or
+    /// [`IndexError::IndexCorruption`] if the file is non-empty but malformed.
+    pub fn load_tombstones(&self) -> Result<TombstoneSet, IndexError> {
+        let path = self.dir_path.join("tombstones.bin");
+        let data = std::fs::read(&path)?;
+        if data.is_empty() {
+            return Ok(TombstoneSet::new());
+        }
+        TombstoneSet::read_from(&path)
     }
 }
 
@@ -709,5 +728,63 @@ mod tests {
 
         let m3 = segment.get_metadata(FileId(3)).unwrap().unwrap();
         assert_eq!(m3.language, Language::Unknown); // Makefile has no known extension
+    }
+
+    // ---- Task: Tombstone loading tests ----
+
+    use crate::tombstone::TombstoneSet;
+
+    #[test]
+    fn test_segment_load_tombstones_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        fs::create_dir_all(&base_dir).unwrap();
+
+        let files = vec![InputFile {
+            path: "a.rs".to_string(),
+            content: b"fn a() {}".to_vec(),
+            mtime: 0,
+        }];
+
+        let writer = SegmentWriter::new(&base_dir, SegmentId(0));
+        let segment = writer.build(files).unwrap();
+
+        let tombstones = segment.load_tombstones().unwrap();
+        assert!(tombstones.is_empty());
+        assert_eq!(tombstones.len(), 0);
+    }
+
+    #[test]
+    fn test_segment_load_tombstones_after_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        fs::create_dir_all(&base_dir).unwrap();
+
+        let files = vec![
+            InputFile {
+                path: "a.rs".to_string(),
+                content: b"fn a() {}".to_vec(),
+                mtime: 0,
+            },
+            InputFile {
+                path: "b.rs".to_string(),
+                content: b"fn b() {}".to_vec(),
+                mtime: 0,
+            },
+        ];
+
+        let writer = SegmentWriter::new(&base_dir, SegmentId(0));
+        let segment = writer.build(files).unwrap();
+
+        // Manually write a tombstone file marking FileId(0) as deleted
+        let mut ts = TombstoneSet::new();
+        ts.insert(FileId(0));
+        ts.write_to(&segment.dir_path().join("tombstones.bin"))
+            .unwrap();
+
+        let loaded = segment.load_tombstones().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert!(loaded.contains(FileId(0)));
+        assert!(!loaded.contains(FileId(1)));
     }
 }
