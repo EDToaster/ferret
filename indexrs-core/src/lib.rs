@@ -4,6 +4,7 @@ pub mod codec;
 pub mod content;
 pub mod error;
 pub mod git_diff;
+pub mod hybrid_detector;
 pub mod index_reader;
 pub mod index_writer;
 pub mod intersection;
@@ -27,6 +28,7 @@ pub use codec::{
 pub use content::{ContentStoreReader, ContentStoreWriter};
 pub use error::{IndexError, Result};
 pub use git_diff::GitChangeDetector;
+pub use hybrid_detector::HybridDetector;
 pub use index_reader::TrigramIndexReader;
 pub use index_writer::TrigramIndexWriter;
 pub use intersection::{find_candidates, intersect_file_ids};
