@@ -1,7 +1,9 @@
 pub mod binary;
+pub mod changes;
 pub mod codec;
 pub mod content;
 pub mod error;
+pub mod git_diff;
 pub mod index_reader;
 pub mod index_writer;
 pub mod intersection;
@@ -11,17 +13,20 @@ pub mod search;
 pub mod trigram;
 pub mod types;
 pub mod walker;
+pub mod watcher;
 
 pub use binary::{
     is_binary_content, is_binary_extension, is_binary_path, should_index_file,
     DEFAULT_MAX_FILE_SIZE,
 };
+pub use changes::{ChangeEvent, ChangeKind};
 pub use codec::{
     decode_delta_varint, decode_positional_postings, encode_delta_varint,
     encode_positional_postings,
 };
 pub use content::{ContentStoreReader, ContentStoreWriter};
 pub use error::{IndexError, Result};
+pub use git_diff::GitChangeDetector;
 pub use index_reader::TrigramIndexReader;
 pub use index_writer::TrigramIndexWriter;
 pub use intersection::{find_candidates, intersect_file_ids};
@@ -31,3 +36,4 @@ pub use search::{FileMatch, LineMatch, SearchResult};
 pub use trigram::{extract_trigrams, extract_unique_trigrams};
 pub use types::{FileId, Language, SegmentId, SymbolKind, Trigram};
 pub use walker::{DirectoryWalkerBuilder, WalkedFile, Walker};
+pub use watcher::FileWatcher;

@@ -37,6 +37,14 @@ pub enum IndexError {
     /// An error occurred while walking the directory tree.
     #[error("walk error: {0}")]
     Walk(String),
+
+    /// A git command failed or the directory is not a git repository.
+    #[error("git error: {0}")]
+    Git(String),
+
+    /// An error occurred in the filesystem watcher.
+    #[error("watcher error: {0}")]
+    Watcher(String),
 }
 
 /// Convenience type alias for `std::result::Result<T, IndexError>`.
