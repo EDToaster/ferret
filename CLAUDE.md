@@ -25,7 +25,7 @@ indexrs is a local code indexing service for fast substring search, inspired by 
 
 ### Workspace Crates
 
-- **`indexrs-core`** — Library with all indexing/search logic (18 modules). No binary targets.
+- **`indexrs-core`** — Library with all indexing/search logic (25 modules). No binary targets.
 - **`indexrs-cli`** — CLI binary (`clap` + `tokio`). Subcommands: search, files, symbols, preview, status, reindex. Currently stubs that delegate to core.
 - **`indexrs-mcp`** — MCP server binary (`rmcp` + `tokio`). Currently a stub.
 
@@ -56,6 +56,15 @@ The indexing pipeline flows: **files → trigrams → posting lists → binary f
 - `git_diff.rs` — `GitChangeDetector` shells out to `git` CLI for change detection. Combines committed changes (since last indexed commit), unstaged changes, and untracked files. De-duplicates by path.
 - `hybrid_detector.rs` — `HybridDetector` merges file watcher (sub-second latency) + periodic git diff (default 30s) into a single de-duplicated `ChangeEvent` stream. On-demand `reindex()` support. Background thread with `Arc<AtomicBool>` flags.
 
+#### M3 Modules (Segment Storage & Incremental Updates)
+
+- `segment.rs` — `InputFile` (file to index), `SegmentWriter` (builds segment dirs atomically from files using M1 pipeline), `Segment` (loads segment from disk with trigram/metadata/content readers). Segments live under `.indexrs/segments/seg_NNNN/`.
+- `tombstone.rs` — `TombstoneSet` bitmap of deleted `FileId`s per segment. Binary persistence to `tombstones.bin` (TOMB magic). `needs_tombstone()`/`needs_new_entry()` helpers map `ChangeKind` to operations.
+- `index_state.rs` — `IndexState` with `Mutex<Arc<Vec<Arc<Segment>>>>` for snapshot isolation. Lock-free reads via `Arc::clone()`, writer mutex for publishing.
+- `multi_search.rs` — `search_segments()` queries all segments in a snapshot, filters tombstoned entries, verifies content matches with line/column tracking, deduplicates across segments (newest wins).
+- `segment_manager.rs` — `SegmentManager` orchestrates segment lifecycle: `index_files()`, `apply_changes()` (tombstone + rebuild), `should_compact()` (>10 segments or >30% tombstone ratio), `compact()` (merge segments removing tombstoned entries), `compact_background()` (tokio::spawn).
+- `recovery.rs` — `recover_segments()` scans segment dirs on startup, cleans temp dirs, validates headers (magic + version), loads valid segments sorted by ID. `cleanup_lock_file()` for stale locks.
+
 ### Binary Formats
 
 All integers are little-endian. The reader uses `memmap2` for zero-copy access.
@@ -81,6 +90,28 @@ Plus **paths.bin** — contiguous UTF-8 path strings (no separators; offsets fro
 
 **content.zst:** Zstd-compressed blocks (level 3), each independently compressed. Random access via (offset, compressed_len) stored in metadata.
 
+**tombstones.bin:**
+```
+[Header 14B]  magic:u32 "TOMB" | version:u16 | max_file_id:u32 | tombstone_count:u32
+[Bitmap]  ceil(max_file_id/64) * 8 bytes of little-endian u64 words
+```
+
+### On-Disk Segment Layout
+
+```
+.indexrs/
+  segments/
+    seg_0001/
+      meta.bin        # File metadata entries
+      trigrams.bin    # Trigram posting lists
+      content.zst     # Zstd-compressed file contents
+      paths.bin       # Path string pool
+      tombstones.bin  # Bitmap of deleted file_ids
+    seg_0002/
+      ...
+  lock                # Advisory lock file for single-writer
+```
+
 ## Project Tracking
 
 Linear project name: indexrs (team: HHC). Design docs live in `docs/design/`, implementation plans in `docs/plans/`.
@@ -90,7 +121,7 @@ Linear project name: indexrs (team: HHC). Design docs live in `docs/design/`, im
 - **M0** (complete) — Types, CLI skeleton, CI pipeline
 - **M1** (complete) — Trigram extraction, posting lists, codec, metadata, content store, binary format reader, intersection
 - **M2** (complete) — Directory walker, language detection, binary detection, file watcher, git-based change detection, hybrid change detector
-- **M3** (not started) — CLI implementation, MCP server, symbol extraction
+- **M3** (complete) — Segment storage, tombstone bitmap, multi-segment query with snapshot isolation, segment manager with compaction, crash recovery
 
 ## Conventions
 
