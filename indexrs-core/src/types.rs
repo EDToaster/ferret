@@ -92,6 +92,46 @@ pub enum Language {
 }
 
 impl Language {
+    /// Convert this language to its `u16` representation for binary serialization.
+    ///
+    /// Each variant maps to a fixed numeric value. `Unknown` maps to `0xFFFF`.
+    pub fn to_u16(self) -> u16 {
+        match self {
+            Language::Rust => 0,
+            Language::Python => 1,
+            Language::TypeScript => 2,
+            Language::JavaScript => 3,
+            Language::Go => 4,
+            Language::C => 5,
+            Language::Cpp => 6,
+            Language::Java => 7,
+            Language::Ruby => 8,
+            Language::Shell => 9,
+            Language::Markdown => 10,
+            Language::Unknown => 0xFFFF,
+        }
+    }
+
+    /// Reconstruct a `Language` from its `u16` representation.
+    ///
+    /// Unrecognized values map to `Language::Unknown`.
+    pub fn from_u16(v: u16) -> Language {
+        match v {
+            0 => Language::Rust,
+            1 => Language::Python,
+            2 => Language::TypeScript,
+            3 => Language::JavaScript,
+            4 => Language::Go,
+            5 => Language::C,
+            6 => Language::Cpp,
+            7 => Language::Java,
+            8 => Language::Ruby,
+            9 => Language::Shell,
+            10 => Language::Markdown,
+            _ => Language::Unknown,
+        }
+    }
+
     /// Detect language from a file extension string (without the leading dot).
     ///
     /// Returns `Language::Unknown` for unrecognized extensions.
@@ -275,6 +315,40 @@ mod tests {
         assert_eq!(Language::from_extension("unknown"), Language::Unknown);
         assert_eq!(Language::from_extension(""), Language::Unknown);
         assert_eq!(Language::from_extension("xyz"), Language::Unknown);
+    }
+
+    #[test]
+    fn test_language_u16_roundtrip() {
+        let languages = [
+            Language::Rust,
+            Language::Python,
+            Language::TypeScript,
+            Language::JavaScript,
+            Language::Go,
+            Language::C,
+            Language::Cpp,
+            Language::Java,
+            Language::Ruby,
+            Language::Shell,
+            Language::Markdown,
+            Language::Unknown,
+        ];
+        for lang in languages {
+            assert_eq!(Language::from_u16(lang.to_u16()), lang);
+        }
+    }
+
+    #[test]
+    fn test_language_u16_known_values() {
+        assert_eq!(Language::Rust.to_u16(), 0);
+        assert_eq!(Language::Python.to_u16(), 1);
+        assert_eq!(Language::Unknown.to_u16(), 0xFFFF);
+    }
+
+    #[test]
+    fn test_language_from_u16_unknown() {
+        assert_eq!(Language::from_u16(999), Language::Unknown);
+        assert_eq!(Language::from_u16(0xFFFE), Language::Unknown);
     }
 
     #[test]
