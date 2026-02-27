@@ -12,19 +12,27 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use indexrs_core::{
-    // M0: types
-    FileId, FileMetadata, Language,
     // M1: indexing pipeline
-    ContentStoreReader, ContentStoreWriter, MetadataBuilder, PostingListBuilder,
-    TrigramIndexReader, TrigramIndexWriter,
-    // M1: search
-    find_candidates,
+    ContentStoreReader,
+    ContentStoreWriter,
+    DEFAULT_MAX_FILE_SIZE,
     // M2: file discovery
     DirectoryWalkerBuilder,
-    // M2: binary detection
-    is_binary_content, is_binary_path, DEFAULT_MAX_FILE_SIZE,
+    // M0: types
+    FileId,
+    FileMetadata,
     // M2: change detection
     GitChangeDetector,
+    Language,
+    MetadataBuilder,
+    PostingListBuilder,
+    TrigramIndexReader,
+    TrigramIndexWriter,
+    // M1: search
+    find_candidates,
+    // M2: binary detection
+    is_binary_content,
+    is_binary_path,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -96,7 +104,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Show language breakdown
-    let mut lang_counts: std::collections::HashMap<Language, u32> = std::collections::HashMap::new();
+    let mut lang_counts: std::collections::HashMap<Language, u32> =
+        std::collections::HashMap::new();
     for (_, _, lang) in &text_files {
         *lang_counts.entry(*lang).or_default() += 1;
     }
