@@ -254,18 +254,28 @@ impl<'a> MetadataReader<'a> {
     ///
     /// Performs a linear scan of entries since file IDs may not be contiguous.
     /// Returns `None` if no entry with the given ID exists.
-    pub fn get(&self, file_id: FileId) -> Option<FileMetadata> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IndexError::IndexCorruption`] if the entry's path data is
+    /// out of bounds or contains invalid UTF-8.
+    pub fn get(&self, file_id: FileId) -> Result<Option<FileMetadata>, IndexError> {
         for i in 0..self.entry_count {
-            let entry = self.read_entry(i);
+            let entry = self.read_entry(i)?;
             if entry.file_id == file_id {
-                return Some(entry);
+                return Ok(Some(entry));
             }
         }
-        None
+        Ok(None)
     }
 
     /// Read the entry at the given index (0-based).
-    fn read_entry(&self, index: u32) -> FileMetadata {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IndexError::IndexCorruption`] if the path offset/length is
+    /// out of bounds in the paths pool, or if the path bytes are not valid UTF-8.
+    fn read_entry(&self, index: u32) -> Result<FileMetadata, IndexError> {
         let offset = HEADER_SIZE + (index as usize) * ENTRY_SIZE;
         let entry_data = &self.data[offset..offset + ENTRY_SIZE];
 
@@ -284,11 +294,22 @@ impl<'a> MetadataReader<'a> {
         let content_offset = u64::from_le_bytes(entry_data[46..54].try_into().unwrap());
         let content_len = u32::from_le_bytes(entry_data[54..58].try_into().unwrap());
 
-        let path = std::str::from_utf8(&self.paths[path_offset..path_offset + path_len])
-            .expect("path is not valid UTF-8")
+        let path_end = path_offset.checked_add(path_len).ok_or_else(|| {
+            IndexError::IndexCorruption(format!(
+                "path offset overflow: offset={path_offset}, len={path_len}"
+            ))
+        })?;
+        if path_end > self.paths.len() {
+            return Err(IndexError::IndexCorruption(format!(
+                "path data out of bounds: offset={path_offset}, len={path_len}, pool_size={}",
+                self.paths.len()
+            )));
+        }
+        let path = std::str::from_utf8(&self.paths[path_offset..path_end])
+            .map_err(|e| IndexError::IndexCorruption(format!("invalid UTF-8 in path: {e}")))?
             .to_string();
 
-        FileMetadata {
+        Ok(FileMetadata {
             file_id,
             path,
             content_hash,
@@ -298,7 +319,7 @@ impl<'a> MetadataReader<'a> {
             line_count,
             content_offset,
             content_len,
-        }
+        })
     }
 }
 
@@ -485,7 +506,7 @@ mod tests {
         assert_eq!(reader.entry_count(), 3);
 
         for original in &entries {
-            let read_back = reader.get(original.file_id).unwrap();
+            let read_back = reader.get(original.file_id).unwrap().unwrap();
             assert_eq!(read_back.file_id, original.file_id);
             assert_eq!(read_back.path, original.path);
             assert_eq!(read_back.content_hash, original.content_hash);
@@ -507,7 +528,7 @@ mod tests {
 
         let reader = MetadataReader::new(&meta_buf, &paths_buf).unwrap();
         assert_eq!(reader.entry_count(), 0);
-        assert!(reader.get(FileId(0)).is_none());
+        assert!(reader.get(FileId(0)).unwrap().is_none());
     }
 
     #[test]
@@ -530,7 +551,7 @@ mod tests {
         let reader = MetadataReader::new(&meta_buf, &paths_buf).unwrap();
 
         for (i, expected_path) in paths.iter().enumerate() {
-            let entry = reader.get(FileId(i as u32)).unwrap();
+            let entry = reader.get(FileId(i as u32)).unwrap().unwrap();
             assert_eq!(entry.path, *expected_path);
         }
     }
@@ -545,7 +566,7 @@ mod tests {
         builder.write_to(&mut meta_buf, &mut paths_buf).unwrap();
 
         let reader = MetadataReader::new(&meta_buf, &paths_buf).unwrap();
-        assert!(reader.get(FileId(99)).is_none());
+        assert!(reader.get(FileId(99)).unwrap().is_none());
     }
 
     #[test]
@@ -656,7 +677,7 @@ mod tests {
         assert_eq!(reader.entry_count(), languages.len() as u32);
 
         for (i, &expected_lang) in languages.iter().enumerate() {
-            let entry = reader.get(FileId(i as u32)).unwrap();
+            let entry = reader.get(FileId(i as u32)).unwrap().unwrap();
             assert_eq!(
                 entry.language, expected_lang,
                 "language mismatch at index {i}"
@@ -684,7 +705,7 @@ mod tests {
         builder.write_to(&mut meta_buf, &mut paths_buf).unwrap();
 
         let reader = MetadataReader::new(&meta_buf, &paths_buf).unwrap();
-        let entry = reader.get(FileId(u32::MAX - 1)).unwrap();
+        let entry = reader.get(FileId(u32::MAX - 1)).unwrap().unwrap();
         assert_eq!(entry.size_bytes, u32::MAX);
         assert_eq!(entry.mtime_epoch_secs, u64::MAX);
         assert_eq!(entry.line_count, u32::MAX);

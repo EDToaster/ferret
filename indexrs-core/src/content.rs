@@ -32,7 +32,7 @@
 //! ```
 
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 
 use memmap2::Mmap;
@@ -44,6 +44,13 @@ use crate::IndexError;
 /// Level 3 provides a good balance of compression speed and ratio for source
 /// code, typically achieving 3-5x compression.
 const ZSTD_COMPRESSION_LEVEL: i32 = 3;
+
+/// Maximum decompressed content size (10 MB).
+///
+/// Prevents memory exhaustion from malicious or corrupted compressed data
+/// (zip-bomb style attacks). Since the indexer's default max file size is 1 MB,
+/// this provides a generous safety margin.
+const MAX_DECOMPRESSED_SIZE: usize = 10 * 1024 * 1024;
 
 /// Writer for building the content store (`content.zst`).
 ///
@@ -159,8 +166,19 @@ impl ContentStoreReader {
         }
 
         let compressed = &self.mmap[start..end];
-        zstd::stream::decode_all(compressed)
-            .map_err(|e| IndexError::IndexCorruption(format!("zstd decompression failed: {e}")))
+        let decoder = zstd::stream::Decoder::new(compressed)
+            .map_err(|e| IndexError::IndexCorruption(format!("zstd decoder init failed: {e}")))?;
+        let mut output = Vec::new();
+        let bytes_read = decoder
+            .take(MAX_DECOMPRESSED_SIZE as u64 + 1)
+            .read_to_end(&mut output)
+            .map_err(|e| IndexError::IndexCorruption(format!("zstd decompression failed: {e}")))?;
+        if bytes_read > MAX_DECOMPRESSED_SIZE {
+            return Err(IndexError::IndexCorruption(format!(
+                "decompressed content exceeds size limit of {MAX_DECOMPRESSED_SIZE} bytes"
+            )));
+        }
+        Ok(output)
     }
 }
 
