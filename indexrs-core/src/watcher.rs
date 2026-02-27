@@ -116,10 +116,10 @@ impl FileWatcher {
                         })
                         .collect();
 
-                    if !changes.is_empty() {
-                        if let Err(e) = tx.send(changes) {
-                            tracing::warn!("failed to send change events: {e}");
-                        }
+                    if !changes.is_empty()
+                        && let Err(e) = tx.send(changes)
+                    {
+                        tracing::warn!("failed to send change events: {e}");
                     }
                 }
                 Err(errors) => {

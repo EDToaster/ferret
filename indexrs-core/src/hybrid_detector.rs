@@ -88,10 +88,10 @@ impl HybridDetector {
             let poll_step = Duration::from_millis(100);
 
             // Run an initial git diff on startup.
-            if let Ok(events) = git.detect_changes() {
-                if !events.is_empty() {
-                    let _ = tx.send(dedup_events(events));
-                }
+            if let Ok(events) = git.detect_changes()
+                && !events.is_empty()
+            {
+                let _ = tx.send(dedup_events(events));
             }
 
             let mut elapsed = Duration::ZERO;
@@ -108,10 +108,10 @@ impl HybridDetector {
                     Err(mpsc::TryRecvError::Disconnected) => {
                         // Watcher channel closed — trigger a git diff scan
                         // as fallback.
-                        if let Ok(events) = git.detect_changes() {
-                            if !events.is_empty() {
-                                let _ = tx.send(dedup_events(events));
-                            }
+                        if let Ok(events) = git.detect_changes()
+                            && !events.is_empty()
+                        {
+                            let _ = tx.send(dedup_events(events));
                         }
                     }
                     Err(mpsc::TryRecvError::Empty) => {}
@@ -119,20 +119,20 @@ impl HybridDetector {
 
                 // Check reindex flag.
                 if reindex_flag.swap(false, Ordering::SeqCst) {
-                    if let Ok(events) = git.detect_changes() {
-                        if !events.is_empty() {
-                            let _ = tx.send(dedup_events(events));
-                        }
+                    if let Ok(events) = git.detect_changes()
+                        && !events.is_empty()
+                    {
+                        let _ = tx.send(dedup_events(events));
                     }
                     elapsed = Duration::ZERO;
                 }
 
                 // Periodic git diff.
                 if elapsed >= poll_interval {
-                    if let Ok(events) = git.detect_changes() {
-                        if !events.is_empty() {
-                            let _ = tx.send(dedup_events(events));
-                        }
+                    if let Ok(events) = git.detect_changes()
+                        && !events.is_empty()
+                    {
+                        let _ = tx.send(dedup_events(events));
                     }
                     elapsed = Duration::ZERO;
                 }

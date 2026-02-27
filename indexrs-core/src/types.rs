@@ -237,10 +237,10 @@ impl Language {
     /// ```
     pub fn from_path(path: &Path) -> Language {
         // Check filename-based detection first (e.g., Dockerfile)
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name == "Dockerfile" || name.starts_with("Dockerfile.") {
-                return Language::Dockerfile;
-            }
+        if let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && (name == "Dockerfile" || name.starts_with("Dockerfile."))
+        {
+            return Language::Dockerfile;
         }
 
         // Fall back to extension-based detection
