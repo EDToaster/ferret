@@ -92,7 +92,7 @@ impl LineIndex {
 
 use regex::Regex;
 
-use crate::search::{LineMatch, MatchPattern};
+use crate::search::{ContextBlock, ContextLine, LineMatch, MatchPattern};
 
 /// Content verifier that matches a pattern against decompressed file content.
 ///
@@ -231,6 +231,86 @@ impl ContentVerifier {
                     .line_content(text.as_bytes(), line_num)
                     .to_string(),
                 ranges,
+            })
+            .collect()
+    }
+
+    /// Verify content and return context blocks with surrounding lines.
+    ///
+    /// Each `ContextBlock` contains one or more matching lines plus up to
+    /// `context_lines` before/after. When matches are close together (within
+    /// `2 * context_lines`), their blocks are merged to avoid duplicate lines.
+    ///
+    /// Returns an empty vector if no matches are found.
+    pub fn verify_with_context(&self, content: &[u8]) -> Vec<ContextBlock> {
+        let line_matches = self.verify(content);
+        if line_matches.is_empty() {
+            return Vec::new();
+        }
+
+        let line_index = LineIndex::new(content);
+        let total_lines = line_index.line_count() as u32;
+
+        if self.context_lines == 0 {
+            // No context: each match is its own block with empty before/after
+            return line_matches
+                .into_iter()
+                .map(|m| ContextBlock {
+                    before: Vec::new(),
+                    matches: vec![m],
+                    after: Vec::new(),
+                })
+                .collect();
+        }
+
+        // Group matches into ranges that should be merged
+        let mut groups: Vec<Vec<LineMatch>> = Vec::new();
+
+        for m in line_matches {
+            let should_merge = groups.last().map_or(false, |group| {
+                let last_line = group.last().unwrap().line_number;
+                // Merge if the gap between the last match and this match
+                // is within 2 * context_lines (their contexts would overlap)
+                m.line_number <= last_line + 2 * self.context_lines + 1
+            });
+
+            if should_merge {
+                groups.last_mut().unwrap().push(m);
+            } else {
+                groups.push(vec![m]);
+            }
+        }
+
+        // Build context blocks from groups
+        groups
+            .into_iter()
+            .map(|matches| {
+                let first_match_line = matches.first().unwrap().line_number;
+                let last_match_line = matches.last().unwrap().line_number;
+
+                // Before context: lines before the first match
+                let before_start = first_match_line.saturating_sub(self.context_lines).max(1);
+                let before: Vec<ContextLine> = (before_start..first_match_line)
+                    .map(|ln| ContextLine {
+                        line_number: ln,
+                        content: line_index.line_content(content, ln).to_string(),
+                    })
+                    .collect();
+
+                // After context: lines after the last match
+                let after_end = (last_match_line + self.context_lines).min(total_lines);
+                let after: Vec<ContextLine> = (last_match_line + 1..=after_end)
+                    .map(|ln| ContextLine {
+                        line_number: ln,
+                        content: line_index.line_content(content, ln).to_string(),
+                    })
+                    .collect();
+
+                ContextBlock {
+                    before,
+                    matches,
+                    after,
+                }
             })
             .collect()
     }
@@ -427,5 +507,86 @@ mod tests {
         );
         let result = verifier.verify(content);
         assert!(result.is_empty());
+    }
+
+    // ---- Context line tests ----
+
+    #[test]
+    fn test_context_single_match() {
+        let content = b"line 1\nline 2\nline 3\nMATCH\nline 5\nline 6\nline 7\n";
+        let verifier = ContentVerifier::new(MatchPattern::Literal("MATCH".to_string()), 2);
+        let blocks = verifier.verify_with_context(content);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].before.len(), 2); // lines 2, 3
+        assert_eq!(blocks[0].before[0].line_number, 2);
+        assert_eq!(blocks[0].before[1].line_number, 3);
+        assert_eq!(blocks[0].matches.len(), 1);
+        assert_eq!(blocks[0].matches[0].line_number, 4);
+        assert_eq!(blocks[0].after.len(), 2); // lines 5, 6
+        assert_eq!(blocks[0].after[0].line_number, 5);
+        assert_eq!(blocks[0].after[1].line_number, 6);
+    }
+
+    #[test]
+    fn test_context_at_file_start() {
+        let content = b"MATCH\nline 2\nline 3\nline 4\n";
+        let verifier = ContentVerifier::new(MatchPattern::Literal("MATCH".to_string()), 2);
+        let blocks = verifier.verify_with_context(content);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].before.len(), 0); // no lines before line 1
+        assert_eq!(blocks[0].after.len(), 2);
+    }
+
+    #[test]
+    fn test_context_at_file_end() {
+        let content = b"line 1\nline 2\nMATCH\n";
+        let verifier = ContentVerifier::new(MatchPattern::Literal("MATCH".to_string()), 2);
+        let blocks = verifier.verify_with_context(content);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].before.len(), 2);
+        assert_eq!(blocks[0].after.len(), 0); // no lines after last line
+    }
+
+    #[test]
+    fn test_context_merging_adjacent_matches() {
+        // Two matches within 2*context_lines of each other should merge
+        let content = b"line 1\nMATCH1\nline 3\nMATCH2\nline 5\n";
+        let verifier = ContentVerifier::new(MatchPattern::Literal("MATCH".to_string()), 1);
+        let blocks = verifier.verify_with_context(content);
+        // With context_lines=1, MATCH1 (line 2) context = [1, 3]
+        // MATCH2 (line 4) context = [3, 5]
+        // They overlap at line 3, so should merge into one block
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].matches.len(), 2);
+    }
+
+    #[test]
+    fn test_context_separate_blocks() {
+        // Two matches far apart should produce separate blocks
+        let content = b"MATCH1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nMATCH2\n";
+        let verifier = ContentVerifier::new(MatchPattern::Literal("MATCH".to_string()), 1);
+        let blocks = verifier.verify_with_context(content);
+        // MATCH1 (line 1) context after = [2], MATCH2 (line 8) context before = [7]
+        // Gap between line 2 and line 7 -- separate blocks
+        assert_eq!(blocks.len(), 2);
+    }
+
+    #[test]
+    fn test_context_zero_lines() {
+        let content = b"line 1\nMATCH\nline 3\n";
+        let verifier = ContentVerifier::new(MatchPattern::Literal("MATCH".to_string()), 0);
+        let blocks = verifier.verify_with_context(content);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].before.len(), 0);
+        assert_eq!(blocks[0].after.len(), 0);
+        assert_eq!(blocks[0].matches.len(), 1);
+    }
+
+    #[test]
+    fn test_context_no_matches() {
+        let content = b"line 1\nline 2\nline 3\n";
+        let verifier = ContentVerifier::new(MatchPattern::Literal("NOMATCH".to_string()), 2);
+        let blocks = verifier.verify_with_context(content);
+        assert!(blocks.is_empty());
     }
 }
