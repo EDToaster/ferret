@@ -84,13 +84,14 @@ files → trigram extraction → posting lists → delta-varint codec → binary
 ### Search pipeline
 
 ```
-query → trigram extraction → posting list intersection → candidate verification
+query → parse → plan → trigram intersection → candidate verification → ranking
 ```
 
-1. **Extract trigrams** from the query string
-2. **Binary search** the memory-mapped trigram table for each trigram's posting list
-3. **Intersect** all posting lists (smallest-first, two-pointer merge)
-4. **Verify** candidates by decompressing content and doing a byte-level substring match
+1. **Parse** query string into an AST (supports AND, OR, NOT, phrases, regex, path/language filters)
+2. **Plan** the query: extract trigrams, estimate posting list sizes, choose smallest-first intersection order
+3. **Intersect** posting lists via memory-mapped binary search on the trigram table
+4. **Verify** candidates by decompressing content and matching (literal, regex, or case-insensitive)
+5. **Rank** results by composite score: match type, path depth, filename match, match density, recency
 
 ### Incremental updates
 
@@ -125,6 +126,7 @@ Three mechanisms feed changes into the segment manager:
 | M1: Trigram indexing, posting lists, codec, search | Complete |
 | M2: Directory walker, binary detection, file watcher, git change detection | Complete |
 | M3: Segments, tombstones, multi-segment query, compaction, crash recovery | Complete |
+| M4: Query parser, query planner, content verifier, relevance ranking | Complete |
 
 ## License
 
