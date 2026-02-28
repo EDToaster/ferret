@@ -180,27 +180,59 @@ impl SegmentManager {
         results
     }
 
-    /// Build a new segment from input files and add it to the index.
+    /// Index a set of files, splitting into multiple segments when the
+    /// accumulated content size exceeds `max_segment_bytes`.
     ///
-    /// Allocates a new segment ID, builds the segment via `SegmentWriter`,
-    /// and atomically publishes it. The writer lock is held for the duration
-    /// of the build.
+    /// This bounds peak memory during the build to approximately
+    /// `max_segment_bytes` of file content plus overhead for posting lists.
     ///
-    /// # Errors
+    /// # Arguments
     ///
-    /// Returns `IndexError` if the segment build fails (I/O error, etc.).
-    pub fn index_files(&self, files: Vec<InputFile>) -> Result<(), IndexError> {
+    /// * `files` - The files to index.
+    /// * `max_segment_bytes` - Soft limit on total uncompressed content bytes
+    ///   per segment. A single file larger than this limit will still be placed
+    ///   in its own segment. A value of 0 means no limit (single segment).
+    pub fn index_files_with_budget(
+        &self,
+        files: Vec<InputFile>,
+        max_segment_bytes: usize,
+    ) -> Result<(), IndexError> {
         let _guard = self.write_lock.lock().unwrap();
-        let seg_id = self.next_segment_id();
-        let writer = SegmentWriter::new(&self.segments_dir, seg_id);
-        let segment = writer.build(files)?;
-        let segment = Arc::new(segment);
 
+        let mut batch: Vec<InputFile> = Vec::new();
+        let mut batch_bytes: usize = 0;
         let mut segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
-        segments.push(segment);
-        self.state.publish(segments);
 
+        for file in files {
+            let content_len = file.content.len();
+            batch.push(file);
+            batch_bytes += content_len;
+
+            if max_segment_bytes > 0 && batch_bytes > max_segment_bytes {
+                let seg_id = self.next_segment_id();
+                let writer = SegmentWriter::new(&self.segments_dir, seg_id);
+                segments.push(Arc::new(writer.build(std::mem::take(&mut batch))?));
+                batch_bytes = 0;
+            }
+        }
+
+        // Flush remaining files
+        if !batch.is_empty() {
+            let seg_id = self.next_segment_id();
+            let writer = SegmentWriter::new(&self.segments_dir, seg_id);
+            segments.push(Arc::new(writer.build(batch)?));
+        }
+
+        self.state.publish(segments);
         Ok(())
+    }
+
+    /// Index a set of files into the index.
+    ///
+    /// Uses [`DEFAULT_COMPACTION_BUDGET`] to split large inputs into
+    /// multiple capped segments, bounding peak memory.
+    pub fn index_files(&self, files: Vec<InputFile>) -> Result<(), IndexError> {
+        self.index_files_with_budget(files, DEFAULT_COMPACTION_BUDGET)
     }
 
     /// Apply a batch of file change events to the index.
@@ -579,8 +611,7 @@ mod tests {
         manager.index_files(vec![]).unwrap();
 
         let snap = manager.snapshot();
-        assert_eq!(snap.len(), 1); // empty segment is still added
-        assert_eq!(snap[0].entry_count(), 0);
+        assert_eq!(snap.len(), 0); // no segment created for empty input
     }
 
     // ---- apply_changes tests ----
