@@ -261,7 +261,11 @@ impl SegmentWriter {
             ContentStoreWriter::new(&temp_dir.join("content.zst")).map_err(IndexError::Io)?;
 
         for (i, input) in files.iter().enumerate() {
-            let file_id = FileId(i as u32);
+            let file_id = FileId(u32::try_from(i).map_err(|_| {
+                IndexError::IndexCorruption(
+                    "too many files for segment (>4B)".to_string(),
+                )
+            })?);
 
             // Hash content with blake3, truncate to 16 bytes
             let hash = blake3::hash(&input.content);
@@ -288,7 +292,7 @@ impl SegmentWriter {
                 path: input.path.clone(),
                 content_hash,
                 language,
-                size_bytes: input.content.len() as u32,
+                size_bytes: u32::try_from(input.content.len()).unwrap_or(u32::MAX),
                 mtime_epoch_secs: input.mtime,
                 line_count,
                 content_offset,

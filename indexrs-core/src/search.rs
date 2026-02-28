@@ -93,6 +93,9 @@ pub struct SearchOptions {
     /// Number of context lines to include before and after each match.
     /// Default: 0 (no context).
     pub context_lines: usize,
+    /// Maximum number of matching files to return. `None` means no limit.
+    /// Default: None.
+    pub max_results: Option<usize>,
 }
 
 /// Aggregate result of a search query.

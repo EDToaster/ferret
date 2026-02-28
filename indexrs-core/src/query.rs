@@ -406,8 +406,11 @@ impl<'a> Parser<'a> {
         let pattern = self.input[start..self.pos].to_string();
         self.pos += 1; // consume closing /
 
-        // Validate the regex pattern at parse time
-        if let Err(e) = regex::Regex::new(&pattern) {
+        // Validate the regex pattern at parse time (1 MB size limit to prevent ReDoS)
+        if let Err(e) = regex::RegexBuilder::new(&pattern)
+            .size_limit(1 << 20)
+            .build()
+        {
             return Err(IndexError::QueryParse(format!(
                 "invalid regex at position {start}: {e}"
             )));

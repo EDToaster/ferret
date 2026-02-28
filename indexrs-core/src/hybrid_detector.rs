@@ -97,25 +97,33 @@ impl HybridDetector {
             let mut elapsed = Duration::ZERO;
 
             while running.load(Ordering::SeqCst) {
-                // Check for watcher events (non-blocking).
-                match watcher_rx.try_recv() {
-                    Ok(events) => {
-                        let deduped = dedup_events(events);
-                        if !deduped.is_empty() && tx.send(deduped).is_err() {
+                // Drain all pending watcher event batches (non-blocking).
+                let mut watcher_disconnected = false;
+                loop {
+                    match watcher_rx.try_recv() {
+                        Ok(events) => {
+                            let deduped = dedup_events(events);
+                            if !deduped.is_empty() && tx.send(deduped).is_err() {
+                                watcher_disconnected = true;
+                                break;
+                            }
+                        }
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            // Watcher channel closed — do one final git scan, then exit
+                            // to avoid hammering git in a tight loop.
+                            if let Ok(events) = git.detect_changes()
+                                && !events.is_empty()
+                            {
+                                let _ = tx.send(dedup_events(events));
+                            }
+                            watcher_disconnected = true;
                             break;
                         }
+                        Err(mpsc::TryRecvError::Empty) => break,
                     }
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        // Watcher channel closed — do one final git scan, then exit
-                        // to avoid hammering git in a tight loop.
-                        if let Ok(events) = git.detect_changes()
-                            && !events.is_empty()
-                        {
-                            let _ = tx.send(dedup_events(events));
-                        }
-                        break;
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {}
+                }
+                if watcher_disconnected {
+                    break;
                 }
 
                 // Check reindex flag.

@@ -199,6 +199,11 @@ pub fn search_segments_with_options(
                     merged.insert(fm.path.clone(), (seg_id, fm));
                 }
             }
+            if let Some(max) = options.max_results
+                && merged.len() >= max
+            {
+                break;
+            }
         }
     }
 
@@ -1037,7 +1042,7 @@ mod tests {
         );
 
         let snapshot: SegmentList = Arc::new(vec![seg]);
-        let opts = SearchOptions { context_lines: 1 };
+        let opts = SearchOptions { context_lines: 1, max_results: None };
         let result = search_segments_with_options(&snapshot, "println", &opts).unwrap();
         assert_eq!(result.files.len(), 1);
         assert_eq!(result.files[0].lines.len(), 1);

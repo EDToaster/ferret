@@ -155,7 +155,7 @@ impl SegmentManager {
     /// Acquires the writer lock, appends the segment to the current list,
     /// and publishes the new list atomically.
     pub fn add_segment(&self, segment: Arc<Segment>) {
-        let _guard = self.write_lock.lock().unwrap();
+        let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
         segments.push(segment);
         self.state.publish(segments);
@@ -205,7 +205,7 @@ impl SegmentManager {
         files: Vec<InputFile>,
         max_segment_bytes: usize,
     ) -> Result<(), IndexError> {
-        let _guard = self.write_lock.lock().unwrap();
+        let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut batch: Vec<InputFile> = Vec::new();
         let mut batch_bytes: usize = 0;
@@ -272,7 +272,7 @@ impl SegmentManager {
             return Ok(());
         }
 
-        let _guard = self.write_lock.lock().unwrap();
+        let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
         let current_segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
 
         // Track tombstones to write per segment index
@@ -298,9 +298,29 @@ impl SegmentManager {
 
             // Read new content if needed
             if tombstone::needs_new_entry(&change.kind) {
+                // Finding 8: Validate path to prevent path traversal attacks.
+                // Since the file may not exist yet we cannot canonicalize it,
+                // so we check that the path has no `..` components and is not absolute.
+                let has_dotdot = change.path.components().any(|c| {
+                    c == std::path::Component::ParentDir
+                });
+                if has_dotdot || change.path.is_absolute() {
+                    tracing::warn!(
+                        path = %change.path.display(),
+                        "skipping change with potentially unsafe path (contains '..' or is absolute)"
+                    );
+                    continue;
+                }
+
                 let full_path = repo_dir.join(&change.path);
                 if full_path.exists() {
                     let content = fs::read(&full_path)?;
+
+                    // Finding 9: Skip binary files and files exceeding the size limit.
+                    if !crate::binary::should_index_file(&full_path, &content, 1_048_576) {
+                        continue;
+                    }
+
                     let mtime = full_path
                         .metadata()
                         .and_then(|m| m.modified())
@@ -405,7 +425,7 @@ impl SegmentManager {
     ///   the current batch is flushed as a segment and a new batch begins.
     ///   A value of 0 means no limit (equivalent to `compact()`).
     pub fn compact_with_budget(&self, max_segment_bytes: usize) -> Result<(), IndexError> {
-        let _guard = self.write_lock.lock().unwrap();
+        let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
         let current_segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
 
         if current_segments.is_empty() {

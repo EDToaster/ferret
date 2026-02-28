@@ -87,18 +87,66 @@ impl FileWatcher {
                 Ok(events) => {
                     let changes: Vec<ChangeEvent> = events
                         .into_iter()
-                        .filter_map(|debounced| {
+                        .flat_map(|debounced| {
                             let event = &debounced.event;
-                            let kind = classify_event_kind(&event.kind)?;
+                            let kind = match classify_event_kind(&event.kind) {
+                                Some(k) => k,
+                                None => return vec![],
+                            };
 
-                            // Use the last path — for renames this is the
-                            // destination; for everything else there is only
-                            // one path.
-                            let path = event.paths.last()?;
+                            // For renames with both source and destination paths,
+                            // emit a Deleted event for the old path and a Created
+                            // event for the new path.
+                            if kind == ChangeKind::Renamed && event.paths.len() >= 2 {
+                                let old_path = match event.paths.first() {
+                                    Some(p) => p,
+                                    None => return vec![],
+                                };
+                                let new_path = match event.paths.last() {
+                                    Some(p) => p,
+                                    None => return vec![],
+                                };
+                                let mut result = vec![];
+                                // Emit Deleted for old path
+                                if !path_has_component(old_path, ".git") {
+                                    let is_dir = old_path.is_dir();
+                                    if !gitignore
+                                        .matched_path_or_any_parents(old_path, is_dir)
+                                        .is_ignore()
+                                    {
+                                        let rel = old_path.strip_prefix(&root).unwrap_or(old_path);
+                                        result.push(ChangeEvent {
+                                            path: rel.to_path_buf(),
+                                            kind: ChangeKind::Deleted,
+                                        });
+                                    }
+                                }
+                                // Emit Created for new path
+                                if !path_has_component(new_path, ".git") {
+                                    let is_dir = new_path.is_dir();
+                                    if !gitignore
+                                        .matched_path_or_any_parents(new_path, is_dir)
+                                        .is_ignore()
+                                    {
+                                        let rel = new_path.strip_prefix(&root).unwrap_or(new_path);
+                                        result.push(ChangeEvent {
+                                            path: rel.to_path_buf(),
+                                            kind: ChangeKind::Created,
+                                        });
+                                    }
+                                }
+                                return result;
+                            }
+
+                            // Use the last path for all other events.
+                            let path = match event.paths.last() {
+                                Some(p) => p,
+                                None => return vec![],
+                            };
 
                             // Drop events inside `.git/` directories.
                             if path_has_component(path, ".git") {
-                                return None;
+                                return vec![];
                             }
 
                             // Drop events for gitignored paths.
@@ -107,17 +155,17 @@ impl FileWatcher {
                                 .matched_path_or_any_parents(path, is_dir)
                                 .is_ignore()
                             {
-                                return None;
+                                return vec![];
                             }
 
                             // Strip the root prefix to emit relative paths,
                             // matching git_diff.rs which emits repo-relative paths.
                             let relative_path = path.strip_prefix(&root).unwrap_or(path);
 
-                            Some(ChangeEvent {
+                            vec![ChangeEvent {
                                 path: relative_path.to_path_buf(),
                                 kind,
-                            })
+                            }]
                         })
                         .collect();
 

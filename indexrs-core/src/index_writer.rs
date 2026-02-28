@@ -155,7 +155,11 @@ impl TrigramIndexWriter {
         let parent = path.parent().unwrap_or(Path::new("."));
         let temp_path = parent.join(format!(".trigrams.bin.tmp.{}", std::process::id()));
 
-        fs::write(&temp_path, &buf)?;
+        {
+            let mut f = std::fs::File::create(&temp_path)?;
+            std::io::Write::write_all(&mut f, &buf)?;
+            f.sync_all()?;
+        }
         fs::rename(&temp_path, path)?;
 
         Ok(())

@@ -91,7 +91,7 @@ impl LineIndex {
     }
 }
 
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 
 use crate::search::{ContextBlock, ContextLine, LineMatch, MatchPattern};
 
@@ -116,17 +116,20 @@ impl ContentVerifier {
     /// * `context_lines` - Number of context lines before/after each match (0 = no context).
     pub fn new(pattern: MatchPattern, context_lines: u32) -> Self {
         let compiled_regex = match &pattern {
-            MatchPattern::Regex(pat) => Regex::new(pat).ok(),
+            MatchPattern::Regex(pat) => RegexBuilder::new(pat).size_limit(1 << 20).build().ok(),
             MatchPattern::LiteralCaseInsensitive(lit) => {
                 // Build a case-insensitive regex from the literal
                 let escaped = regex::escape(lit);
-                Regex::new(&format!("(?i){escaped}")).ok()
+                RegexBuilder::new(&format!("(?i){escaped}"))
+                    .size_limit(1 << 20)
+                    .build()
+                    .ok()
             }
             MatchPattern::Literal(_) => None,
         };
         ContentVerifier {
             pattern,
-            context_lines,
+            context_lines: context_lines.min(1000),
             compiled_regex,
         }
     }
@@ -275,8 +278,12 @@ impl ContentVerifier {
             let should_merge = groups.last().is_some_and(|group| {
                 let last_line = group.last().unwrap().line_number;
                 // Merge if the gap between the last match and this match
-                // is within 2 * context_lines (their contexts would overlap)
-                m.line_number <= last_line + 2 * self.context_lines + 1
+                // is within 2 * context_lines (their contexts would overlap).
+                // Use u64 arithmetic to avoid overflow.
+                (m.line_number as u64)
+                    <= (last_line as u64)
+                        + 2u64 * (self.context_lines as u64)
+                        + 1
             });
 
             if should_merge {
