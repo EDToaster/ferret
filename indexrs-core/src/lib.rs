@@ -44,7 +44,7 @@ pub use index_state::{IndexState, SegmentList};
 pub use index_writer::TrigramIndexWriter;
 pub use intersection::{find_candidates, intersect_file_ids};
 pub use metadata::{FileMetadata, MetadataBuilder, MetadataReader};
-pub use multi_search::search_segments;
+pub use multi_search::{search_segments, search_segments_with_pattern};
 pub use posting::PostingListBuilder;
 pub use query::{LiteralQuery, PhraseQuery, Query, RegexQuery, parse_query};
 pub use query_plan::{
@@ -59,6 +59,7 @@ pub use search::{ContextBlock, ContextLine, FileMatch, LineMatch, MatchPattern, 
 pub use segment::{InputFile, Segment, SegmentWriter};
 pub use segment_manager::SegmentManager;
 pub use tombstone::{TombstoneSet, needs_new_entry, needs_tombstone};
+pub use verify::ContentVerifier;
 pub use trigram::{
     ascii_fold_byte, extract_trigrams, extract_trigrams_folded, extract_unique_trigrams,
     extract_unique_trigrams_folded,
