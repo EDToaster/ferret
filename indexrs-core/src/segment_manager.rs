@@ -1106,4 +1106,199 @@ mod tests {
         assert_eq!(snap.len(), 1);
         assert_eq!(snap[0].entry_count(), 3);
     }
+
+    // ---- compact_with_budget edge case tests ----
+
+    #[test]
+    fn test_compact_with_budget_zero_means_unlimited() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        for i in 0..3 {
+            manager
+                .index_files(vec![InputFile {
+                    path: format!("file_{i}.rs"),
+                    content: format!("fn func_{i}() {{ let x = {i}; }}").into_bytes(),
+                    mtime: 0,
+                }])
+                .unwrap();
+        }
+
+        // budget=0 should produce a single segment (same as compact())
+        manager.compact_with_budget(0).unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].entry_count(), 3);
+    }
+
+    #[test]
+    fn test_compact_with_budget_large_budget_merges_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        for i in 0..5 {
+            manager
+                .index_files(vec![InputFile {
+                    path: format!("file_{i}.rs"),
+                    content: format!("fn func_{i}() {{ let x = {i}; }}").into_bytes(),
+                    mtime: 0,
+                }])
+                .unwrap();
+        }
+
+        // A very large budget should merge everything into one segment
+        manager.compact_with_budget(100 * 1024 * 1024).unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].entry_count(), 5);
+    }
+
+    #[test]
+    fn test_compact_with_budget_excludes_tombstoned() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        manager
+            .index_files(vec![
+                InputFile {
+                    path: "keep.rs".to_string(),
+                    content: b"fn keep() {}".to_vec(),
+                    mtime: 0,
+                },
+                InputFile {
+                    path: "delete.rs".to_string(),
+                    content: b"fn delete() {}".to_vec(),
+                    mtime: 0,
+                },
+            ])
+            .unwrap();
+
+        let changes = vec![ChangeEvent {
+            path: PathBuf::from("delete.rs"),
+            kind: ChangeKind::Deleted,
+        }];
+        manager.apply_changes(&repo_dir, &changes).unwrap();
+
+        // Compact with tiny budget — should still exclude tombstoned
+        manager.compact_with_budget(1).unwrap();
+
+        let snap = manager.snapshot();
+        let mut all_paths: Vec<String> = Vec::new();
+        for seg in snap.iter() {
+            let reader = seg.metadata_reader().unwrap();
+            for entry in reader.iter_all() {
+                all_paths.push(entry.unwrap().path);
+            }
+        }
+        assert_eq!(all_paths, vec!["keep.rs"]);
+    }
+
+    #[test]
+    fn test_compact_with_budget_cleans_old_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let segments_dir = base_dir.join("segments");
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        manager
+            .index_files(vec![InputFile {
+                path: "a.rs".to_string(),
+                content: b"fn a() {}".to_vec(),
+                mtime: 0,
+            }])
+            .unwrap();
+        manager
+            .index_files(vec![InputFile {
+                path: "b.rs".to_string(),
+                content: b"fn b() {}".to_vec(),
+                mtime: 0,
+            }])
+            .unwrap();
+
+        assert!(segments_dir.join("seg_0000").exists());
+        assert!(segments_dir.join("seg_0001").exists());
+
+        manager.compact_with_budget(1).unwrap();
+
+        // Old dirs should be cleaned up
+        assert!(!segments_dir.join("seg_0000").exists());
+        assert!(!segments_dir.join("seg_0001").exists());
+
+        // New segments should exist
+        let snap = manager.snapshot();
+        for seg in snap.iter() {
+            assert!(seg.dir_path().exists());
+        }
+    }
+
+    #[test]
+    fn test_compact_with_budget_empty_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        manager.compact_with_budget(1024).unwrap();
+
+        let snap = manager.snapshot();
+        assert!(snap.is_empty());
+    }
+
+    #[test]
+    fn test_compact_with_budget_single_segment_no_tombstones() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        manager
+            .index_files(vec![InputFile {
+                path: "a.rs".to_string(),
+                content: b"fn a() {}".to_vec(),
+                mtime: 0,
+            }])
+            .unwrap();
+
+        // Should be a no-op
+        manager.compact_with_budget(1024).unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].entry_count(), 1);
+    }
+
+    #[test]
+    fn test_compact_with_budget_searchable_after() {
+        use crate::multi_search::search_segments;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        for i in 0..4 {
+            manager
+                .index_files(vec![InputFile {
+                    path: format!("file_{i}.rs"),
+                    content: format!("fn shared_func_{i}() {{ let result = compute(); }}")
+                        .into_bytes(),
+                    mtime: 0,
+                }])
+                .unwrap();
+        }
+
+        // Compact with small budget to split across segments
+        manager.compact_with_budget(1).unwrap();
+
+        // Search should still find results across all output segments
+        let snap = manager.snapshot();
+        let result = search_segments(&snap, "result").unwrap();
+        assert_eq!(result.files.len(), 4);
+    }
 }
