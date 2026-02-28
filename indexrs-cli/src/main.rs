@@ -1,5 +1,6 @@
 mod args;
 mod color;
+mod files;
 mod output;
 mod repo;
 
