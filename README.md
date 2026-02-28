@@ -36,6 +36,12 @@ cargo run -p indexrs-core --example demo -- . "Trigram"
 
 # Search a specific directory for "fn main"
 cargo run -p indexrs-core --example demo -- ./indexrs-core/src "fn main"
+
+# Build a real on-disk index using the segment manager
+cargo run -p indexrs-core --example build_index --release -- <directory>
+
+# Estimate index disk space and peak RAM
+cargo run -p indexrs-core --example bench_space --release -- <directory>
 ```
 
 ## Building
@@ -71,7 +77,7 @@ files → trigram extraction → posting lists → delta-varint codec → binary
 ```
 
 1. **Trigram extraction** — Slide a 3-byte window over file bytes
-2. **Posting lists** — Map each trigram to the file IDs (and byte offsets) where it appears
+2. **Posting lists** — Map each trigram to the file IDs that contain it (positional byte offsets are optional, disabled by default for ~78% smaller indexes)
 3. **Codec** — Delta-encode sorted IDs, then varint-compress (~4x smaller than raw u32 arrays)
 4. **Segment write** — Serialize to `trigrams.bin` with a sorted trigram table for O(log n) lookup
 
@@ -104,6 +110,8 @@ Three mechanisms feed changes into the segment manager:
 ## Key design decisions
 
 - **Byte-level trigrams** — Works on raw bytes, not characters. UTF-8 multi-byte sequences are handled naturally.
+- **File-only posting lists** — By default, only file-level posting lists are stored (which file IDs contain each trigram). Positional byte-offset postings are optional and disabled in production, reducing index size by ~78% and peak build RAM by ~83%.
+- **Size-budgeted segments** — `index_files_with_budget()` automatically splits large file sets into segments capped at 256 MB of raw content, keeping peak memory bounded.
 - **Memory-mapped reads** — `trigrams.bin`, `meta.bin`, `paths.bin` are mmap'd via `memmap2`. The OS pages data in on demand.
 - **Independent zstd compression** — Each file in `content.zst` is compressed independently (level 3), enabling random access without decompressing the whole store.
 - **Atomic writes** — All writers use temp-file-then-rename for crash safety.

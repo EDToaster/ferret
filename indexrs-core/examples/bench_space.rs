@@ -13,6 +13,7 @@
 //!   cargo run -p indexrs-core --example bench_space --release -- <directory> 256
 
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -84,8 +85,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut skipped_binary = 0u64;
     let mut skipped_large = 0u64;
     let mut skipped_read_err = 0u64;
+    let total = walked.len();
 
-    for w in &walked {
+    for (idx, w) in walked.iter().enumerate() {
+        if idx % 100 == 0 || idx + 1 == total {
+            let pct = (idx + 1) * 100 / total;
+            eprint!("\x1b[2K\rFiltering files... {pct}% ({}/{})", idx + 1, total);
+            let _ = std::io::stderr().flush();
+        }
         if is_binary_path(&w.path) {
             skipped_binary += 1;
             continue;
@@ -108,6 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let lang = Language::from_path(&w.path);
         files.push((w.path.clone(), content, lang));
     }
+    eprintln!("\x1b[2K\rFiltered {total} entries");
 
     let file_count = files.len() as u64;
     let raw_content_bytes: u64 = files.iter().map(|(_, c, _)| c.len() as u64).sum();
@@ -121,21 +129,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("  Skipped read err: {skipped_read_err}");
 
     // Phase 2: Measure compressed content size
-    eprint!("Compressing content...");
     let mut compressed_total: u64 = 0;
-    for (_, content, _) in &files {
+    let fc = files.len();
+    for (idx, (_, content, _)) in files.iter().enumerate() {
+        if idx % 100 == 0 || idx + 1 == fc {
+            let pct = (idx + 1) * 100 / fc.max(1);
+            eprint!("\x1b[2K\rCompressing content... {pct}% ({}/{})", idx + 1, fc);
+            let _ = std::io::stderr().flush();
+        }
         let compressed = zstd::encode_all(content.as_slice(), 3)?;
         compressed_total += compressed.len() as u64;
     }
-    eprintln!(" done");
+    eprintln!("\x1b[2K\rCompressed {fc} files");
 
     // Phase 3: Build posting lists and measure encoded size
-    eprint!("Building trigram posting lists...");
     let mut file_postings: HashMap<Trigram, Vec<u32>> = HashMap::new();
     let mut total_trigram_occurrences: u64 = 0;
     let mut unique_trigrams_per_file: u64 = 0;
 
     for (i, (_, content, _)) in files.iter().enumerate() {
+        if i % 100 == 0 || i + 1 == fc {
+            let pct = (i + 1) * 100 / fc.max(1);
+            eprint!("\x1b[2K\rBuilding trigram posting lists... {pct}% ({}/{})", i + 1, fc);
+            let _ = std::io::stderr().flush();
+        }
         let file_id = i as u32;
 
         // File-level postings (unique trigrams per file)
@@ -148,18 +165,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Count total occurrences for positional posting estimate
         total_trigram_occurrences += extract_trigrams(content).count() as u64;
     }
-    eprintln!(" done");
+    eprintln!("\x1b[2K\rBuilt trigram posting lists for {fc} files");
 
     let unique_trigram_count = file_postings.len() as u64;
 
     // Encode file-level posting lists to measure actual size
-    eprint!("Encoding posting lists...");
     let mut file_posting_bytes: u64 = 0;
-    for (_, ids) in &file_postings {
+    let tc = file_postings.len();
+    for (idx, (_, ids)) in file_postings.iter().enumerate() {
+        if idx % 1000 == 0 || idx + 1 == tc {
+            let pct = (idx + 1) * 100 / tc.max(1);
+            eprint!("\x1b[2K\rEncoding posting lists... {pct}% ({}/{})", idx + 1, tc);
+            let _ = std::io::stderr().flush();
+        }
         let encoded = encode_delta_varint(ids);
         file_posting_bytes += encoded.len() as u64;
     }
-    eprintln!(" done");
+    eprintln!("\x1b[2K\rEncoded {tc} posting lists");
 
     // Estimate positional posting size:
     // Each occurrence is (file_id, offset). Grouped by file, delta-encoded.
@@ -282,7 +304,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Per-segment estimates: scale proportionally by content budget
     eprintln!();
     if raw_content_bytes > 0 && segment_budget_bytes > 0 {
-        let num_segments = (raw_content_bytes + segment_budget_bytes - 1) / segment_budget_bytes;
+        let num_segments = raw_content_bytes.div_ceil(segment_budget_bytes);
         let fraction = if raw_content_bytes > segment_budget_bytes {
             segment_budget_bytes as f64 / raw_content_bytes as f64
         } else {
@@ -297,10 +319,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let seg_peak_ram_with_pos =
             seg_ram_content + seg_ram_file_postings + seg_ram_positional + seg_ram_hashmap_with_pos;
 
-        eprintln!(
-            "=== Peak RAM (budgeted, {} MB/segment) ===",
-            segment_budget_mb
-        );
+        eprintln!("=== Peak RAM (budgeted, {segment_budget_mb} MB/segment) ===");
         eprintln!("  Estimated segments:       {num_segments}");
         eprintln!(
             "  File content in memory:   {}",

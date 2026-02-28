@@ -19,13 +19,23 @@ Run the end-to-end demo (indexes a directory, searches it):
 cargo run -p indexrs-core --example demo -- <directory> <query>
 ```
 
+Build a real on-disk index using the segment manager:
+```bash
+cargo run -p indexrs-core --example build_index --release -- <directory>
+```
+
+Estimate index disk space and peak RAM for a directory:
+```bash
+cargo run -p indexrs-core --example bench_space --release -- <directory> [segment-budget-mb]
+```
+
 ## Architecture
 
 indexrs is a local code indexing service for fast substring search, inspired by zoekt/codesearch. It uses **trigram indexing**: every 3-byte sequence in source files maps to posting lists of file IDs and byte offsets. Search works by extracting trigrams from the query, intersecting posting lists to find candidate files, then verifying matches against actual content.
 
 ### Workspace Crates
 
-- **`indexrs-core`** — Library with all indexing/search logic (25 modules). No binary targets.
+- **`indexrs-core`** — Library with all indexing/search logic (24 modules). No binary targets.
 - **`indexrs-cli`** — CLI binary (`clap` + `tokio`). Subcommands: search, files, symbols, preview, status, reindex. Currently stubs that delegate to core.
 - **`indexrs-mcp`** — MCP server binary (`rmcp` + `tokio`). Currently a stub.
 
@@ -36,7 +46,7 @@ The indexing pipeline flows: **files → trigrams → posting lists → binary f
 #### M0–M1 Modules (Indexing & Search)
 
 - `trigram.rs` — `extract_trigrams()` slides a 3-byte window over content. `extract_unique_trigrams()` deduplicates.
-- `posting.rs` — `PostingListBuilder` accumulates file-level and positional posting lists during index build. Call `add_file()` per file, then `finalize()` to sort/dedup.
+- `posting.rs` — `PostingListBuilder` accumulates file-level posting lists during index build. Call `add_file()` per file, then `finalize()` to sort/dedup. Two constructors: `new()` stores positions (for tests), `file_only()` skips positional postings (used by `SegmentWriter`, ~78% smaller index).
 - `codec.rs` — Delta-varint encoding/decoding for compact posting list serialization. Uses `integer-encoding` crate.
 - `index_writer.rs` — `TrigramIndexWriter::write()` serializes `PostingListBuilder` to `trigrams.bin`. Atomic rename for crash safety.
 - `index_reader.rs` — `TrigramIndexReader::open()` memory-maps `trigrams.bin`. O(log n) binary search on sorted trigram table, on-demand posting list decoding.
@@ -58,11 +68,11 @@ The indexing pipeline flows: **files → trigrams → posting lists → binary f
 
 #### M3 Modules (Segment Storage & Incremental Updates)
 
-- `segment.rs` — `InputFile` (file to index), `SegmentWriter` (builds segment dirs atomically from files using M1 pipeline), `Segment` (loads segment from disk with trigram/metadata/content readers). Segments live under `.indexrs/segments/seg_NNNN/`.
+- `segment.rs` — `InputFile` (file to index), `SegmentWriter` (builds segment dirs atomically from files using M1 pipeline, uses file-only posting mode), `Segment` (loads segment from disk with trigram/metadata/content readers). Segments live under `.indexrs/segments/seg_NNNN/`.
 - `tombstone.rs` — `TombstoneSet` bitmap of deleted `FileId`s per segment. Binary persistence to `tombstones.bin` (TOMB magic). `needs_tombstone()`/`needs_new_entry()` helpers map `ChangeKind` to operations.
 - `index_state.rs` — `IndexState` with `Mutex<Arc<Vec<Arc<Segment>>>>` for snapshot isolation. Lock-free reads via `Arc::clone()`, writer mutex for publishing.
 - `multi_search.rs` — `search_segments()` queries all segments in a snapshot, filters tombstoned entries, verifies content matches with line/column tracking, deduplicates across segments (newest wins).
-- `segment_manager.rs` — `SegmentManager` orchestrates segment lifecycle: `index_files()`, `apply_changes()` (tombstone + rebuild), `should_compact()` (>10 segments or >30% tombstone ratio), `compact()` (merge segments removing tombstoned entries), `compact_background()` (tokio::spawn).
+- `segment_manager.rs` — `SegmentManager` orchestrates segment lifecycle: `index_files()`, `index_files_with_budget()` (splits into size-capped segments, default 256 MB), `apply_changes()` (tombstone + rebuild), `should_compact()` (>10 segments or >30% tombstone ratio), `compact()` (merge segments removing tombstoned entries), `compact_background()` (tokio::spawn).
 - `recovery.rs` — `recover_segments()` scans segment dirs on startup, cleans temp dirs, validates headers (magic + version), loads valid segments sorted by ID. `cleanup_lock_file()` for stale locks.
 
 ### Binary Formats
@@ -75,8 +85,10 @@ All integers are little-endian. The reader uses `memmap2` for zero-copy access.
 [Trigram Table]  19B/entry, sorted by Trigram::to_u32()
   trigram:[u8;3] | file_list_offset:u32 | file_list_len:u32 | pos_list_offset:u32 | pos_list_len:u32
 [File Posting Lists]  delta-varint encoded file_id sequences
-[Positional Posting Lists]  grouped-by-file_id, delta-encoded offsets
+[Positional Posting Lists]  grouped-by-file_id, delta-encoded offsets (optional; pos_offset/pos_len are 0/0 when absent)
 ```
+
+Positional postings are optional. `SegmentWriter` uses file-only mode (`PostingListBuilder::file_only()`) by default, which sets pos_offset/pos_len to 0/0 for all trigrams. This reduces index size by ~78% and peak build RAM by ~83%. The binary format is unchanged — readers handle 0/0 gracefully by returning empty position lists.
 
 **meta.bin:**
 ```
