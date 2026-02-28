@@ -36,15 +36,36 @@ pub struct PostingListBuilder {
     file_postings: HashMap<Trigram, Vec<FileId>>,
     /// Trigram -> list of (file_id, byte_offset) where this trigram appears.
     positional_postings: HashMap<Trigram, Vec<(FileId, u32)>>,
+    /// Whether to accumulate positional postings.
+    store_positions: bool,
 }
 
 impl PostingListBuilder {
-    /// Create a new empty posting list builder.
+    /// Create a new empty posting list builder with positional postings enabled.
     pub fn new() -> Self {
         PostingListBuilder {
             file_postings: HashMap::new(),
             positional_postings: HashMap::new(),
+            store_positions: true,
         }
+    }
+
+    /// Create a posting list builder that skips positional postings.
+    ///
+    /// Only file-level posting lists are accumulated, dramatically reducing
+    /// memory usage and index size. Use this when byte-offset positions are
+    /// not needed (the common case for search).
+    pub fn file_only() -> Self {
+        PostingListBuilder {
+            file_postings: HashMap::new(),
+            positional_postings: HashMap::new(),
+            store_positions: false,
+        }
+    }
+
+    /// Whether this builder accumulates positional postings.
+    pub fn stores_positions(&self) -> bool {
+        self.store_positions
     }
 
     /// Add a file's content to the index.
@@ -56,16 +77,22 @@ impl PostingListBuilder {
     /// File-level postings may contain duplicate file IDs after multiple calls;
     /// call [`finalize`](Self::finalize) to deduplicate and sort.
     pub fn add_file(&mut self, file_id: FileId, content: &[u8]) {
-        for (offset, trigram) in extract_trigrams(content).enumerate() {
-            debug_assert!(
-                offset <= u32::MAX as usize,
-                "file content too large for u32 offset: {offset}"
-            );
-            self.file_postings.entry(trigram).or_default().push(file_id);
-            self.positional_postings
-                .entry(trigram)
-                .or_default()
-                .push((file_id, offset as u32));
+        if self.store_positions {
+            for (offset, trigram) in extract_trigrams(content).enumerate() {
+                debug_assert!(
+                    offset <= u32::MAX as usize,
+                    "file content too large for u32 offset: {offset}"
+                );
+                self.file_postings.entry(trigram).or_default().push(file_id);
+                self.positional_postings
+                    .entry(trigram)
+                    .or_default()
+                    .push((file_id, offset as u32));
+            }
+        } else {
+            for trigram in extract_trigrams(content) {
+                self.file_postings.entry(trigram).or_default().push(file_id);
+            }
         }
     }
 
@@ -81,8 +108,10 @@ impl PostingListBuilder {
             file_ids.sort();
             file_ids.dedup();
         }
-        for positions in self.positional_postings.values_mut() {
-            positions.sort();
+        if self.store_positions {
+            for positions in self.positional_postings.values_mut() {
+                positions.sort();
+            }
         }
     }
 
@@ -354,5 +383,31 @@ mod tests {
         // Default trait should work the same as new()
         let builder = PostingListBuilder::default();
         assert_eq!(builder.trigram_count(), 0);
+    }
+
+    #[test]
+    fn test_file_only_builder_skips_positions() {
+        let mut builder = PostingListBuilder::file_only();
+        builder.add_file(FileId(0), b"fn main() {}");
+        builder.add_file(FileId(1), b"fn parse() {}");
+        builder.finalize();
+
+        // File postings populated normally
+        assert_eq!(builder.trigram_count(), 17);
+        let fp = builder.file_postings();
+        assert_eq!(
+            fp[&Trigram::from_bytes(b'f', b'n', b' ')],
+            vec![FileId(0), FileId(1)]
+        );
+
+        // Positional postings empty
+        assert!(builder.positional_postings().is_empty());
+        assert!(!builder.stores_positions());
+    }
+
+    #[test]
+    fn test_file_only_stores_positions_flag() {
+        assert!(!PostingListBuilder::file_only().stores_positions());
+        assert!(PostingListBuilder::new().stores_positions());
     }
 }
