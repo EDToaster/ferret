@@ -672,3 +672,97 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use crate::index_reader::TrigramIndexReader;
+    use crate::index_writer::TrigramIndexWriter;
+    use crate::intersection::intersect_file_ids;
+    use crate::posting::PostingListBuilder;
+    use crate::types::FileId;
+
+    /// Build an index with sample files and verify trigram extraction works end-to-end.
+    fn build_test_index() -> (tempfile::TempDir, TrigramIndexReader) {
+        let mut builder = PostingListBuilder::file_only();
+        builder.add_file(FileId(0), b"fn main() { HttpRequest::new() }");
+        builder.add_file(FileId(1), b"fn parse() { HttpResponse::new() }");
+        builder.add_file(FileId(2), b"fn test() { assert!(true) }");
+        builder.finalize();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trigrams.bin");
+        TrigramIndexWriter::write(&builder, &path).unwrap();
+        let reader = TrigramIndexReader::open(&path).unwrap();
+        (dir, reader)
+    }
+
+    /// Look up all posting lists for a TrigramQuery and intersect them.
+    fn lookup_candidates(reader: &TrigramIndexReader, tq: &TrigramQuery) -> Vec<FileId> {
+        match tq {
+            TrigramQuery::All(trigrams) => {
+                let lists: Vec<Vec<FileId>> = trigrams
+                    .iter()
+                    .map(|t| reader.lookup_file_ids(*t).unwrap())
+                    .collect();
+                intersect_file_ids(&lists)
+            }
+            TrigramQuery::Any(branches) => {
+                let mut all_candidates: Vec<FileId> = Vec::new();
+                for branch in branches {
+                    let lists: Vec<Vec<FileId>> = branch
+                        .iter()
+                        .map(|t| reader.lookup_file_ids(*t).unwrap())
+                        .collect();
+                    let candidates = intersect_file_ids(&lists);
+                    all_candidates.extend(candidates);
+                }
+                all_candidates.sort();
+                all_candidates.dedup();
+                all_candidates
+            }
+            TrigramQuery::None => {
+                // Full scan: return all file IDs
+                vec![FileId(0), FileId(1), FileId(2)]
+            }
+        }
+    }
+
+    #[test]
+    fn test_integration_literal_query() {
+        let (_dir, reader) = build_test_index();
+        let tq = extract_literal_trigrams("HttpRequest");
+        let candidates = lookup_candidates(&reader, &tq);
+        // Only file 0 contains "HttpRequest"
+        assert_eq!(candidates, vec![FileId(0)]);
+    }
+
+    #[test]
+    fn test_integration_literal_shared_prefix() {
+        let (_dir, reader) = build_test_index();
+        let tq = extract_literal_trigrams("Http");
+        let candidates = lookup_candidates(&reader, &tq);
+        // Files 0 and 1 both contain "Http"
+        assert!(candidates.contains(&FileId(0)));
+        assert!(candidates.contains(&FileId(1)));
+        assert!(!candidates.contains(&FileId(2)));
+    }
+
+    #[test]
+    fn test_integration_no_match() {
+        let (_dir, reader) = build_test_index();
+        let tq = extract_literal_trigrams("Nonexistent");
+        let candidates = lookup_candidates(&reader, &tq);
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn test_integration_short_query_full_scan() {
+        let (_dir, reader) = build_test_index();
+        let tq = extract_literal_trigrams("fn");
+        // Short query -> None -> full scan
+        assert!(tq.is_none());
+        let candidates = lookup_candidates(&reader, &tq);
+        assert_eq!(candidates.len(), 3); // All files
+    }
+}
