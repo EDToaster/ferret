@@ -120,12 +120,7 @@ impl fmt::Display for QueryPlan {
             write!(f, "filters=[{}], ", filters.join(", "))?;
         }
 
-        write!(
-            f,
-            "{} trigrams, {})",
-            self.trigram_plan.len(),
-            self.verify
-        )
+        write!(f, "{} trigrams, {})", self.trigram_plan.len(), self.verify)
     }
 }
 
@@ -193,11 +188,7 @@ pub fn plan_literal_query(query: &str, pre_filters: &[PreFilter], segment: &Segm
 /// of length >= 3. This covers common patterns like `println!\(` where
 /// "println" and "(" are literal. For full regex trigram extraction, this
 /// will be enhanced by HHC-47's `extract_query_trigrams()` function.
-pub fn plan_regex_query(
-    pattern: &str,
-    pre_filters: &[PreFilter],
-    segment: &Segment,
-) -> QueryPlan {
+pub fn plan_regex_query(pattern: &str, pre_filters: &[PreFilter], segment: &Segment) -> QueryPlan {
     let literal_runs = extract_literal_runs(pattern);
     let reader = segment.trigram_reader();
 
@@ -430,7 +421,10 @@ mod tests {
         };
 
         assert_eq!(plan.pre_filters.len(), 2);
-        assert!(matches!(plan.pre_filters[0], PreFilter::Language(Language::Rust)));
+        assert!(matches!(
+            plan.pre_filters[0],
+            PreFilter::Language(Language::Rust)
+        ));
         assert!(matches!(&plan.pre_filters[1], PreFilter::PathGlob(p) if p == "src/**/*.rs"));
     }
 
@@ -790,5 +784,112 @@ mod tests {
 
         let display = format!("{plan}");
         assert!(display.contains("empty"));
+    }
+
+    // ---- Task 8: Integration tests ----
+
+    #[test]
+    fn test_plan_trigram_ordering_matches_actual_sizes() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        // Build a segment where different trigrams have very different posting list sizes
+        let mut files = Vec::new();
+        // 50 files containing "println" (common)
+        for i in 0..50 {
+            files.push(InputFile {
+                path: format!("common_{i:03}.rs"),
+                content: format!("fn f{i}() {{ println!(\"hello {i}\"); }}").into_bytes(),
+                mtime: 0,
+            });
+        }
+        // 2 files containing "xyzzy" (rare)
+        for i in 0..2 {
+            files.push(InputFile {
+                path: format!("rare_{i}.rs"),
+                content: format!("fn xyzzy_{i}() {{ println!(\"xyzzy\"); }}").into_bytes(),
+                mtime: 0,
+            });
+        }
+
+        let writer = SegmentWriter::new(&base_dir, SegmentId(0));
+        let segment = Arc::new(writer.build(files).unwrap());
+
+        // Query "xyzzy" -- trigrams from "xyzzy" should have small estimated counts
+        let plan = plan_literal_query("xyzzy", &[], &segment);
+
+        assert!(!plan.is_empty);
+        assert!(!plan.trigram_plan.is_empty());
+
+        // The "xyzzy" trigrams should all have estimated count <= 2
+        for scored in &plan.trigram_plan {
+            assert!(
+                scored.estimated_count <= 2,
+                "trigram {} has unexpected count {}: expected <= 2",
+                scored.trigram,
+                scored.estimated_count
+            );
+        }
+
+        // Now plan "println" -- trigrams should have larger estimated counts
+        let plan_common = plan_literal_query("println", &[], &segment);
+
+        assert!(!plan_common.is_empty);
+        // "println" trigrams should have estimated count >= 50
+        // (they appear in all 52 files)
+        for scored in &plan_common.trigram_plan {
+            assert!(
+                scored.estimated_count >= 50,
+                "trigram {} has unexpected count {}: expected >= 50",
+                scored.trigram,
+                scored.estimated_count
+            );
+        }
+    }
+
+    #[test]
+    fn test_plan_and_execute_literal_search() {
+        use crate::index_state::SegmentList;
+        use crate::multi_search::search_segments;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        let segment = build_test_segment(&base_dir);
+
+        // Plan the query
+        let plan = plan_literal_query("println", &[], &segment);
+        assert!(!plan.is_empty);
+        assert!(!plan.can_short_circuit());
+
+        // Execute the search through the existing pipeline
+        let snapshot: SegmentList = Arc::new(vec![segment]);
+        let result = search_segments(&snapshot, "println").unwrap();
+
+        // The search should find matches
+        assert!(!result.files.is_empty());
+
+        // The plan's trigram count should reflect the query
+        // "println" has 5 trigrams: "pri", "rin", "int", "ntl", "tln"
+        assert_eq!(plan.trigram_plan.len(), 5);
+    }
+
+    #[test]
+    fn test_plan_short_circuit_matches_empty_search() {
+        use crate::index_state::SegmentList;
+        use crate::multi_search::search_segments;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        let segment = build_test_segment(&base_dir);
+
+        // Plan for a query that doesn't exist
+        let plan = plan_literal_query("zzzzzzz", &[], &segment);
+        assert!(plan.can_short_circuit());
+
+        // Execute the search -- should also be empty
+        let snapshot: SegmentList = Arc::new(vec![segment]);
+        let result = search_segments(&snapshot, "zzzzzzz").unwrap();
+        assert!(result.files.is_empty());
     }
 }
