@@ -247,7 +247,7 @@ impl SegmentWriter {
         final_dir: &Path,
         files: Vec<InputFile>,
     ) -> Result<Segment, IndexError> {
-        let mut posting_builder = PostingListBuilder::new();
+        let mut posting_builder = PostingListBuilder::file_only();
         let mut metadata_builder = MetadataBuilder::new();
         let mut content_writer =
             ContentStoreWriter::new(&temp_dir.join("content.zst")).map_err(IndexError::Io)?;
@@ -822,5 +822,38 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert!(loaded.contains(FileId(0)));
         assert!(!loaded.contains(FileId(1)));
+    }
+
+    #[test]
+    fn test_segment_writer_uses_file_only_postings() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        fs::create_dir_all(&base_dir).unwrap();
+
+        let files = vec![InputFile {
+            path: "a.rs".to_string(),
+            content: b"fn main() {}".to_vec(),
+            mtime: 0,
+        }];
+
+        let writer = SegmentWriter::new(&base_dir, SegmentId(0));
+        let segment = writer.build(files).unwrap();
+
+        // Positional lookups should return empty
+        let positions = segment
+            .trigram_reader()
+            .lookup_positions(crate::types::Trigram::from_bytes(b'f', b'n', b' '))
+            .unwrap();
+        assert!(
+            positions.is_empty(),
+            "segment should use file-only posting mode"
+        );
+
+        // File-level lookups still work
+        let fids = segment
+            .trigram_reader()
+            .lookup_file_ids(crate::types::Trigram::from_bytes(b'f', b'n', b' '))
+            .unwrap();
+        assert_eq!(fids, vec![FileId(0)]);
     }
 }
