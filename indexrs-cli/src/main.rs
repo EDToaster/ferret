@@ -1,6 +1,7 @@
 mod args;
 mod color;
 mod output;
+mod repo;
 
 use args::{Cli, Command};
 use clap::Parser;
