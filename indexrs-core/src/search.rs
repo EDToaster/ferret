@@ -129,13 +129,45 @@ impl SearchResult {
     }
 }
 
+impl fmt::Display for FileMatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // File header: ## path/to/file  (Language, N matches)
+        writeln!(
+            f,
+            "## {} ({}, {} matches)",
+            self.path.display(),
+            self.language,
+            self.lines.len()
+        )?;
+
+        for line_match in &self.lines {
+            // Context before
+            for ctx in &line_match.context_before {
+                writeln!(f, "L{}:  {}", ctx.line_number, ctx.content)?;
+            }
+            // Match line (marked with *)
+            writeln!(f, "L{}:* {}", line_match.line_number, line_match.content)?;
+            // Context after
+            for ctx in &line_match.context_after {
+                writeln!(f, "L{}:  {}", ctx.line_number, ctx.content)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl fmt::Display for SearchResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
+        writeln!(
             f,
             "{} results in {} files ({:.1?})",
             self.total_match_count, self.total_file_count, self.duration,
-        )
+        )?;
+        for file_match in &self.files {
+            writeln!(f)?;
+            write!(f, "{file_match}")?;
+        }
+        Ok(())
     }
 }
 
@@ -183,6 +215,53 @@ mod tests {
         let display = result.to_string();
         assert!(display.contains("0 results"));
         assert!(display.contains("0 files"));
+    }
+
+    #[test]
+    fn test_file_match_display_with_context() {
+        let file_match = FileMatch {
+            file_id: FileId(1),
+            path: PathBuf::from("src/main.rs"),
+            language: Language::Rust,
+            lines: vec![LineMatch {
+                line_number: 5,
+                content: "fn main() {".to_string(),
+                ranges: vec![(0, 7)],
+                context_before: vec![ContextLine {
+                    line_number: 4,
+                    content: "".to_string(),
+                }],
+                context_after: vec![ContextLine {
+                    line_number: 6,
+                    content: "    println!(\"hello\");".to_string(),
+                }],
+            }],
+            score: 0.9,
+        };
+        let display = file_match.to_string();
+        assert!(display.contains("src/main.rs"));
+        assert!(display.contains("Rust"));
+        assert!(display.contains("L5:"));
+        assert!(display.contains("fn main() {"));
+    }
+
+    #[test]
+    fn test_search_result_display_with_pagination() {
+        let result = SearchResult {
+            total_match_count: 42,
+            total_file_count: 10,
+            files: vec![FileMatch {
+                file_id: FileId(1),
+                path: PathBuf::from("src/main.rs"),
+                language: Language::Rust,
+                lines: vec![],
+                score: 0.9,
+            }],
+            duration: Duration::from_millis(5),
+        };
+        let display = result.to_string();
+        assert!(display.contains("42 results"));
+        assert!(display.contains("10 files"));
     }
 
     #[test]
