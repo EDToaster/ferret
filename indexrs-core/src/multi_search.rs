@@ -336,6 +336,7 @@ fn search_single_segment_with_pattern(
     segment: &Segment,
     pattern: &MatchPattern,
     tombstones: &TombstoneSet,
+    context_lines: usize,
 ) -> Result<Vec<FileMatch>, IndexError> {
     // Extract the literal text for trigram candidate filtering.
     // For Regex patterns, we extract the literal prefix before metacharacters.
@@ -357,7 +358,7 @@ fn search_single_segment_with_pattern(
         return Ok(Vec::new());
     };
 
-    let verifier = ContentVerifier::new(pattern.clone(), 0);
+    let verifier = ContentVerifier::new(pattern.clone(), context_lines as u32);
     let mut file_matches = Vec::new();
 
     for file_id in candidates {
@@ -374,10 +375,42 @@ fn search_single_segment_with_pattern(
             .content_reader()
             .read_content(meta.content_offset, meta.content_len)?;
 
-        let line_matches = verifier.verify(&content);
-        if line_matches.is_empty() {
-            continue;
-        }
+        let line_matches = if context_lines > 0 {
+            let blocks = verifier.verify_with_context(&content);
+            if blocks.is_empty() {
+                continue;
+            }
+            // Flatten ContextBlocks into LineMatches with context populated
+            blocks
+                .into_iter()
+                .flat_map(|block| {
+                    let before = block.before;
+                    let after = block.after;
+                    let match_count = block.matches.len();
+                    block.matches.into_iter().enumerate().map(move |(i, m)| {
+                        LineMatch {
+                            context_before: if i == 0 {
+                                before.clone()
+                            } else {
+                                vec![]
+                            },
+                            context_after: if i == match_count - 1 {
+                                after.clone()
+                            } else {
+                                vec![]
+                            },
+                            ..m
+                        }
+                    })
+                })
+                .collect()
+        } else {
+            let matches = verifier.verify(&content);
+            if matches.is_empty() {
+                continue;
+            }
+            matches
+        };
 
         // Compute relevance score using the weighted ranking system
         let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
@@ -445,7 +478,7 @@ pub fn search_segments_with_pattern(
 
     for segment in snapshot.iter() {
         let tombstones = segment.load_tombstones()?;
-        let file_matches = search_single_segment_with_pattern(segment, pattern, &tombstones)?;
+        let file_matches = search_single_segment_with_pattern(segment, pattern, &tombstones, 0)?;
 
         for fm in file_matches {
             let seg_id = segment.segment_id();
@@ -468,6 +501,72 @@ pub fn search_segments_with_pattern(
 
     let total_file_count = files.len();
     let total_match_count: usize = files.iter().map(|f| f.lines.len()).sum();
+
+    Ok(SearchResult {
+        total_match_count,
+        total_file_count,
+        files,
+        duration: start.elapsed(),
+    })
+}
+
+/// Search across multiple segments using a `MatchPattern` with options.
+///
+/// Combines pattern-aware matching (regex, case-insensitive) with
+/// search options (context lines, max results).
+pub fn search_segments_with_pattern_and_options(
+    snapshot: &SegmentList,
+    pattern: &MatchPattern,
+    options: &SearchOptions,
+) -> Result<SearchResult, IndexError> {
+    let start = Instant::now();
+
+    if snapshot.is_empty() {
+        return Ok(SearchResult {
+            total_match_count: 0,
+            total_file_count: 0,
+            files: Vec::new(),
+            duration: start.elapsed(),
+        });
+    }
+
+    let mut merged: HashMap<PathBuf, (SegmentId, FileMatch)> = HashMap::new();
+
+    for segment in snapshot.iter() {
+        let tombstones = segment.load_tombstones()?;
+        let file_matches = search_single_segment_with_pattern(
+            segment,
+            pattern,
+            &tombstones,
+            options.context_lines,
+        )?;
+
+        for fm in file_matches {
+            let seg_id = segment.segment_id();
+            match merged.get(&fm.path) {
+                Some((existing_seg_id, _)) if *existing_seg_id >= seg_id => {}
+                _ => {
+                    merged.insert(fm.path.clone(), (seg_id, fm));
+                }
+            }
+        }
+    }
+
+    let mut files: Vec<FileMatch> = merged.into_values().map(|(_, fm)| fm).collect();
+    files.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.path.cmp(&b.path))
+    });
+
+    let total_file_count = files.len();
+    let total_match_count: usize = files.iter().map(|f| f.lines.len()).sum();
+
+    // Apply max_results limit
+    if let Some(max) = options.max_results {
+        files.truncate(max);
+    }
 
     Ok(SearchResult {
         total_match_count,
@@ -1157,5 +1256,36 @@ mod tests {
             "alphabetical tiebreaker: alpha before beta"
         );
         assert_eq!(result.files[1].path, PathBuf::from("src/beta.rs"));
+    }
+
+    #[test]
+    fn test_search_segments_with_pattern_and_options() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![InputFile {
+                path: "main.rs".to_string(),
+                content: b"line one\nline two\nfn hello() {}\nline four\nline five\n".to_vec(),
+                mtime: 0,
+            }],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let pattern = MatchPattern::LiteralCaseInsensitive("hello".to_string());
+        let options = SearchOptions {
+            context_lines: 1,
+            max_results: None,
+        };
+        let result =
+            search_segments_with_pattern_and_options(&snapshot, &pattern, &options).unwrap();
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(result.files[0].lines[0].line_number, 3);
+        // Should have context
+        assert!(!result.files[0].lines[0].context_before.is_empty());
+        assert!(!result.files[0].lines[0].context_after.is_empty());
     }
 }

@@ -47,6 +47,7 @@ pub use intersection::{find_candidates, intersect_file_ids};
 pub use metadata::{FileMetadata, MetadataBuilder, MetadataReader};
 pub use multi_search::{
     search_segments, search_segments_with_options, search_segments_with_pattern,
+    search_segments_with_pattern_and_options,
 };
 pub use posting::PostingListBuilder;
 pub use query::{LiteralQuery, PhraseQuery, Query, RegexQuery, parse_query};
