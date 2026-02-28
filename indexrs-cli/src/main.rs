@@ -1,11 +1,14 @@
 mod args;
 mod color;
+mod output;
 
 use args::{Cli, Command};
 use clap::Parser;
 
 #[tokio::main]
 async fn main() {
+    output::setup_sigpipe();
+
     let cli = Cli::parse();
 
     match cli.command {
