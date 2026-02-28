@@ -46,7 +46,10 @@ pub use metadata::{FileMetadata, MetadataBuilder, MetadataReader};
 pub use multi_search::search_segments;
 pub use posting::PostingListBuilder;
 pub use query::{LiteralQuery, PhraseQuery, Query, RegexQuery, parse_query};
-pub use query_plan::{PreFilter, QueryPlan, ScoredTrigram, VerifyStep};
+pub use query_plan::{
+    PreFilter, QueryInput, QueryPlan, ScoredTrigram, VerifyStep, plan_literal_query,
+    plan_query, plan_query_multi, plan_regex_query,
+};
 pub use query_trigrams::{
     TrigramQuery, extract_literal_trigrams, extract_query_trigrams, extract_regex_trigrams,
 };

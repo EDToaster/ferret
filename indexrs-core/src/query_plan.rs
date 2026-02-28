@@ -7,6 +7,7 @@
 //!
 //! The plan is segment-specific because posting list sizes vary per segment.
 
+use crate::index_state::SegmentList;
 use crate::segment::Segment;
 use crate::trigram::extract_unique_trigrams;
 use crate::types::{Language, Trigram};
@@ -269,6 +270,54 @@ fn is_regex_meta(b: u8) -> bool {
     )
 }
 
+/// Input to the query planner, representing the parsed query's essential fields.
+///
+/// This is a bridge type used until the full Query AST from HHC-46 is available.
+/// Once the parser is implemented, `plan_query()` will accept `&Query` directly
+/// and extract the relevant fields.
+#[derive(Debug, Clone, PartialEq)]
+pub enum QueryInput {
+    /// A literal substring search.
+    Literal {
+        /// The exact substring to search for.
+        pattern: String,
+        /// Pre-filters to apply (language, path).
+        filters: Vec<PreFilter>,
+    },
+    /// A regex pattern search.
+    Regex {
+        /// The regex pattern string.
+        pattern: String,
+        /// Pre-filters to apply (language, path).
+        filters: Vec<PreFilter>,
+    },
+}
+
+/// Build a query plan for a parsed query against a single segment.
+///
+/// Dispatches to `plan_literal_query()` or `plan_regex_query()` based on
+/// the query input type.
+pub fn plan_query(input: &QueryInput, segment: &Segment) -> QueryPlan {
+    match input {
+        QueryInput::Literal { pattern, filters } => plan_literal_query(pattern, filters, segment),
+        QueryInput::Regex { pattern, filters } => plan_regex_query(pattern, filters, segment),
+    }
+}
+
+/// Build query plans for all segments in a snapshot.
+///
+/// Returns a vector of `(SegmentId, QueryPlan)` pairs, one per segment.
+/// Each plan is optimized for its specific segment's posting list sizes.
+pub fn plan_query_multi(
+    input: &QueryInput,
+    segments: &SegmentList,
+) -> Vec<(crate::types::SegmentId, QueryPlan)> {
+    segments
+        .iter()
+        .map(|segment| (segment.segment_id(), plan_query(input, segment)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -510,5 +559,90 @@ mod tests {
 
         assert_eq!(plan.pre_filters.len(), 1);
         assert!(matches!(plan.verify, VerifyStep::Regex(_)));
+    }
+
+    // ---- Task 5: plan_query and plan_query_multi tests ----
+
+    #[test]
+    fn test_plan_query_literal() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        let segment = build_test_segment(&base_dir);
+
+        let input = QueryInput::Literal {
+            pattern: "println".to_string(),
+            filters: vec![],
+        };
+
+        let plan = plan_query(&input, &segment);
+
+        assert!(!plan.is_empty);
+        assert!(matches!(plan.verify, VerifyStep::Literal(ref s) if s == "println"));
+    }
+
+    #[test]
+    fn test_plan_query_regex() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        let segment = build_test_segment(&base_dir);
+
+        let input = QueryInput::Regex {
+            pattern: r"println!\(".to_string(),
+            filters: vec![PreFilter::Language(Language::Rust)],
+        };
+
+        let plan = plan_query(&input, &segment);
+
+        assert!(!plan.is_empty);
+        assert!(matches!(plan.verify, VerifyStep::Regex(_)));
+        assert_eq!(plan.pre_filters.len(), 1);
+    }
+
+    #[test]
+    fn test_plan_query_multi_segment() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg0 = {
+            let writer = SegmentWriter::new(&base_dir, SegmentId(0));
+            Arc::new(
+                writer
+                    .build(vec![InputFile {
+                        path: "a.rs".to_string(),
+                        content: b"fn main() { println!(\"hello\"); }".to_vec(),
+                        mtime: 0,
+                    }])
+                    .unwrap(),
+            )
+        };
+
+        let seg1 = {
+            let writer = SegmentWriter::new(&base_dir, SegmentId(1));
+            Arc::new(
+                writer
+                    .build(vec![InputFile {
+                        path: "b.rs".to_string(),
+                        content: b"fn other() { println!(\"world\"); }".to_vec(),
+                        mtime: 0,
+                    }])
+                    .unwrap(),
+            )
+        };
+
+        let segments: crate::index_state::SegmentList = Arc::new(vec![seg0, seg1]);
+        let input = QueryInput::Literal {
+            pattern: "println".to_string(),
+            filters: vec![],
+        };
+
+        let plans = plan_query_multi(&input, &segments);
+
+        assert_eq!(plans.len(), 2);
+        // Each plan should have trigrams
+        for (_seg_id, plan) in &plans {
+            assert!(!plan.is_empty);
+            assert!(!plan.trigram_plan.is_empty());
+        }
     }
 }
