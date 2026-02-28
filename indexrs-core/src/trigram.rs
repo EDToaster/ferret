@@ -51,6 +51,56 @@ pub fn extract_unique_trigrams(content: &[u8]) -> HashSet<Trigram> {
     extract_trigrams(content).collect()
 }
 
+/// Fold an ASCII uppercase byte to lowercase. Non-ASCII and non-alpha bytes pass through unchanged.
+#[inline]
+pub fn ascii_fold_byte(b: u8) -> u8 {
+    if b.is_ascii_uppercase() {
+        b.to_ascii_lowercase()
+    } else {
+        b
+    }
+}
+
+/// Extract all trigrams from content with ASCII case folding.
+///
+/// Like [`extract_trigrams`], but folds A-Z to a-z in each byte before
+/// forming the trigram. This produces lowercase trigrams regardless of the
+/// original content case, enabling case-insensitive index lookups.
+///
+/// # Examples
+///
+/// ```
+/// use indexrs_core::trigram::extract_trigrams_folded;
+/// use indexrs_core::Trigram;
+///
+/// let content = b"ABC";
+/// let trigrams: Vec<Trigram> = extract_trigrams_folded(content).collect();
+/// assert_eq!(trigrams, vec![Trigram::from_bytes(b'a', b'b', b'c')]);
+/// ```
+pub fn extract_trigrams_folded(content: &[u8]) -> impl Iterator<Item = Trigram> + '_ {
+    content.windows(3).map(|w| {
+        Trigram::from_bytes(
+            ascii_fold_byte(w[0]),
+            ascii_fold_byte(w[1]),
+            ascii_fold_byte(w[2]),
+        )
+    })
+}
+
+/// Extract the unique set of trigrams from content with ASCII case folding.
+///
+/// # Examples
+///
+/// ```
+/// use indexrs_core::trigram::extract_unique_trigrams_folded;
+///
+/// let unique = extract_unique_trigrams_folded(b"ABab");
+/// assert_eq!(unique.len(), 2);
+/// ```
+pub fn extract_unique_trigrams_folded(content: &[u8]) -> HashSet<Trigram> {
+    extract_trigrams_folded(content).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +216,77 @@ mod tests {
         assert_eq!(trigrams.len(), 2);
         assert_eq!(trigrams[0], Trigram::from_bytes(0xFF, 0x00, 0x80));
         assert_eq!(trigrams[1], Trigram::from_bytes(0x00, 0x80, 0x7F));
+    }
+
+    #[test]
+    fn test_ascii_fold_byte_lowercase_unchanged() {
+        for b in b'a'..=b'z' {
+            assert_eq!(ascii_fold_byte(b), b);
+        }
+    }
+
+    #[test]
+    fn test_ascii_fold_byte_uppercase_folded() {
+        for (upper, lower) in (b'A'..=b'Z').zip(b'a'..=b'z') {
+            assert_eq!(ascii_fold_byte(upper), lower);
+        }
+    }
+
+    #[test]
+    fn test_ascii_fold_byte_non_alpha_unchanged() {
+        for b in [b'0', b'9', b' ', b'\n', b'{', b'}', b'(', 0xFF, 0x00, 0x80] {
+            assert_eq!(ascii_fold_byte(b), b);
+        }
+    }
+
+    #[test]
+    fn test_extract_trigrams_folded_lowercase_content() {
+        let content = b"abc";
+        let folded: Vec<Trigram> = extract_trigrams_folded(content).collect();
+        let raw: Vec<Trigram> = extract_trigrams(content).collect();
+        assert_eq!(folded, raw);
+    }
+
+    #[test]
+    fn test_extract_trigrams_folded_uppercase_content() {
+        let content = b"ABC";
+        let trigrams: Vec<Trigram> = extract_trigrams_folded(content).collect();
+        assert_eq!(trigrams, vec![Trigram::from_bytes(b'a', b'b', b'c')]);
+    }
+
+    #[test]
+    fn test_extract_trigrams_folded_mixed_case() {
+        let content = b"FnMain";
+        let trigrams: Vec<Trigram> = extract_trigrams_folded(content).collect();
+        assert_eq!(trigrams.len(), 4);
+        assert_eq!(trigrams[0], Trigram::from_bytes(b'f', b'n', b'm'));
+        assert_eq!(trigrams[1], Trigram::from_bytes(b'n', b'm', b'a'));
+        assert_eq!(trigrams[2], Trigram::from_bytes(b'm', b'a', b'i'));
+        assert_eq!(trigrams[3], Trigram::from_bytes(b'a', b'i', b'n'));
+    }
+
+    #[test]
+    fn test_extract_trigrams_folded_non_ascii_passthrough() {
+        let content: &[u8] = &[0xFF, b'A', b'B', 0x80];
+        let trigrams: Vec<Trigram> = extract_trigrams_folded(content).collect();
+        assert_eq!(trigrams.len(), 2);
+        assert_eq!(trigrams[0], Trigram::from_bytes(0xFF, b'a', b'b'));
+        assert_eq!(trigrams[1], Trigram::from_bytes(b'a', b'b', 0x80));
+    }
+
+    #[test]
+    fn test_extract_unique_trigrams_folded_deduplicates_case() {
+        let content = b"AaA";
+        let unique = extract_unique_trigrams_folded(content);
+        assert_eq!(unique.len(), 1);
+        assert!(unique.contains(&Trigram::from_bytes(b'a', b'a', b'a')));
+    }
+
+    #[test]
+    fn test_extract_unique_trigrams_folded_fn_main() {
+        let content = b"fn main() {}";
+        let folded = extract_unique_trigrams_folded(content);
+        let raw = extract_unique_trigrams(content);
+        assert_eq!(folded, raw);
     }
 }

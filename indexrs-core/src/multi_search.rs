@@ -20,9 +20,9 @@ use crate::types::SegmentId;
 /// the matching lines with highlight ranges.
 ///
 /// This is the content verification step after trigram candidate filtering.
-/// For each line in `content`, finds all occurrences of `query` (byte-level
-/// substring search) and builds a `LineMatch` with 1-based line numbers and
-/// byte-offset highlight ranges.
+/// For each line in `content`, finds all occurrences of `query` using
+/// case-insensitive (ASCII-folded) matching and builds a `LineMatch` with
+/// 1-based line numbers and byte-offset highlight ranges.
 ///
 /// Returns an empty vector if the query is empty or not found.
 fn verify_content_matches(content: &[u8], query: &str) -> Vec<LineMatch> {
@@ -30,7 +30,8 @@ fn verify_content_matches(content: &[u8], query: &str) -> Vec<LineMatch> {
         return Vec::new();
     }
 
-    let query_bytes = query.as_bytes();
+    // Fold query to lowercase for case-insensitive matching.
+    let folded_query: Vec<u8> = query.bytes().map(crate::trigram::ascii_fold_byte).collect();
     let text = String::from_utf8_lossy(content);
     let mut matches = Vec::new();
 
@@ -42,12 +43,17 @@ fn verify_content_matches(content: &[u8], query: &str) -> Vec<LineMatch> {
 
         let mut ranges = Vec::new();
         let line_bytes = line.as_bytes();
+        // Fold the line bytes for searching.
+        let folded_line: Vec<u8> = line_bytes
+            .iter()
+            .map(|&b| crate::trigram::ascii_fold_byte(b))
+            .collect();
         let mut search_start = 0;
 
-        while search_start + query_bytes.len() <= line_bytes.len() {
-            if let Some(pos) = find_substring(&line_bytes[search_start..], query_bytes) {
+        while search_start + folded_query.len() <= folded_line.len() {
+            if let Some(pos) = find_substring(&folded_line[search_start..], &folded_query) {
                 let abs_start = search_start + pos;
-                let abs_end = abs_start + query_bytes.len();
+                let abs_end = abs_start + folded_query.len();
                 ranges.push((abs_start, abs_end));
                 search_start = abs_start + 1; // advance past start to find overlapping matches
             } else {
@@ -545,6 +551,40 @@ mod tests {
         let result = search_segments(&snapshot, "println").unwrap();
         assert_eq!(result.files.len(), 0);
         assert_eq!(result.total_count, 0);
+    }
+
+    #[test]
+    fn test_search_segments_case_insensitive_via_folded_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![
+                InputFile {
+                    path: "main.rs".to_string(),
+                    content: b"fn HttpRequest() {}".to_vec(),
+                    mtime: 0,
+                },
+                InputFile {
+                    path: "lib.rs".to_string(),
+                    content: b"fn httprequest() {}".to_vec(),
+                    mtime: 0,
+                },
+            ],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+
+        // Searching "httprequest" (lowercase) should find BOTH files
+        let result = search_segments(&snapshot, "httprequest").unwrap();
+        assert_eq!(
+            result.files.len(),
+            2,
+            "both files should match via case-folded trigrams"
+        );
     }
 
     #[test]
