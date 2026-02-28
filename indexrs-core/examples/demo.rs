@@ -128,7 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let t2 = Instant::now();
     eprintln!("\n=== Phase 3: Index Build ===");
 
-    let mut posting_builder = PostingListBuilder::new();
+    let mut posting_builder = PostingListBuilder::file_only();
     let mut metadata_builder = MetadataBuilder::new();
     let mut content_writer = ContentStoreWriter::new(&index_dir.join("content.zst"))?;
 

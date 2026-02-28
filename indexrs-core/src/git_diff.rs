@@ -435,7 +435,9 @@ mod tests {
 
     #[test]
     fn test_is_indexrs_path() {
-        assert!(is_indexrs_path(&PathBuf::from(".indexrs/segments/seg_0000/trigrams.bin")));
+        assert!(is_indexrs_path(&PathBuf::from(
+            ".indexrs/segments/seg_0000/trigrams.bin"
+        )));
         assert!(is_indexrs_path(&PathBuf::from(".indexrs/lock")));
         assert!(is_indexrs_path(&PathBuf::from(".indexrs")));
         assert!(!is_indexrs_path(&PathBuf::from("src/main.rs")));
@@ -446,7 +448,8 @@ mod tests {
     #[test]
     fn test_parse_untracked_filters_indexrs() {
         // Simulate git reporting .indexrs files as untracked
-        let output = "src/main.rs\n.indexrs/segments/seg_0000/trigrams.bin\n.indexrs/lock\nlib.rs\n";
+        let output =
+            "src/main.rs\n.indexrs/segments/seg_0000/trigrams.bin\n.indexrs/lock\nlib.rs\n";
         let events = parse_untracked(output);
 
         // parse_untracked itself doesn't filter — the filter is in detect_changes.

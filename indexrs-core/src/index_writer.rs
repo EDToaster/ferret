@@ -110,14 +110,10 @@ impl TrigramIndexWriter {
                 let encoded = encode_positional_postings(&raw_positions);
 
                 let offset: u32 = pos_postings_buf.len().try_into().map_err(|_| {
-                    IndexError::IndexCorruption(
-                        "positional posting offset exceeds u32::MAX".into(),
-                    )
+                    IndexError::IndexCorruption("positional posting offset exceeds u32::MAX".into())
                 })?;
                 let len: u32 = positions.len().try_into().map_err(|_| {
-                    IndexError::IndexCorruption(
-                        "positional posting count exceeds u32::MAX".into(),
-                    )
+                    IndexError::IndexCorruption("positional posting count exceeds u32::MAX".into())
                 })?;
                 pos_postings_buf.extend_from_slice(&encoded);
                 pos_posting_entries.push((offset, len));

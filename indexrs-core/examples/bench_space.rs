@@ -17,9 +17,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use indexrs_core::{
-    DEFAULT_MAX_FILE_SIZE, DirectoryWalkerBuilder, Language, Trigram,
-    encode_delta_varint, extract_trigrams, extract_unique_trigrams,
-    is_binary_content, is_binary_path,
+    DEFAULT_MAX_FILE_SIZE, DirectoryWalkerBuilder, Language, Trigram, encode_delta_varint,
+    extract_trigrams, extract_unique_trigrams, is_binary_content, is_binary_path,
 };
 
 /// Metadata entry size in meta.bin (fixed 58 bytes per file).
@@ -62,7 +61,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Usage: {} <directory> [segment-budget-mb]", args[0]);
         eprintln!();
         eprintln!("Estimates how much disk space an indexrs index would use.");
-        eprintln!("Optional segment-budget-mb sets per-segment content cap (default: {DEFAULT_SEGMENT_BUDGET_MB}).");
+        eprintln!(
+            "Optional segment-budget-mb sets per-segment content cap (default: {DEFAULT_SEGMENT_BUDGET_MB})."
+        );
         std::process::exit(1);
     }
     let dir = PathBuf::from(&args[1]);
@@ -167,19 +168,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let positional_posting_bytes_est = (total_trigram_occurrences as f64 * 1.5) as u64;
 
     // Phase 4: Compute component sizes
-    let trigram_table_bytes = TRIGRAM_HEADER_SIZE as u64
-        + unique_trigram_count * TRIGRAM_TABLE_ENTRY_SIZE as u64;
+    let trigram_table_bytes =
+        TRIGRAM_HEADER_SIZE as u64 + unique_trigram_count * TRIGRAM_TABLE_ENTRY_SIZE as u64;
 
-    let trigrams_bin = trigram_table_bytes + file_posting_bytes + positional_posting_bytes_est;
+    let trigrams_bin_file_only = trigram_table_bytes + file_posting_bytes;
+    let trigrams_bin_with_positions = trigrams_bin_file_only + positional_posting_bytes_est;
 
     let path_pool_bytes: u64 = files
         .iter()
-        .map(|(p, _, _)| {
-            p.strip_prefix(&dir)
-                .unwrap_or(p)
-                .to_string_lossy()
-                .len() as u64
-        })
+        .map(|(p, _, _)| p.strip_prefix(&dir).unwrap_or(p).to_string_lossy().len() as u64)
         .sum();
 
     let meta_bin = META_HEADER_SIZE as u64 + file_count * META_ENTRY_SIZE as u64;
@@ -187,51 +184,100 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let content_zst = compressed_total;
     let tombstone_bin = TOMBSTONE_HEADER_SIZE as u64; // empty tombstone per segment
 
-    let total_index = trigrams_bin + meta_bin + paths_bin + content_zst + tombstone_bin;
+    let total_index = trigrams_bin_file_only + meta_bin + paths_bin + content_zst + tombstone_bin;
+    let total_index_with_positions =
+        trigrams_bin_with_positions + meta_bin + paths_bin + content_zst + tombstone_bin;
 
     // Phase 5: Estimate peak RAM during segment build
     // PostingListBuilder holds:
     //   file_postings: HashMap<Trigram, Vec<FileId>> — ~unique_trigrams_per_file * 4 bytes
-    //   positional_postings: HashMap<Trigram, Vec<(FileId, u32)>> — ~total_occurrences * 8 bytes
+    //   positional_postings (if enabled): HashMap<Trigram, Vec<(FileId, u32)>> — ~total_occurrences * 8 bytes
     let ram_file_postings = unique_trigrams_per_file * 4;
     let ram_positional_postings = total_trigram_occurrences * 8;
     // HashMap overhead: ~1.5x for buckets/pointers
-    let ram_hashmap_overhead =
-        ((unique_trigram_count * 2 * 48) as f64 * 1.5) as u64; // two hashmaps, ~48 bytes per bucket
+    let ram_hashmap_file_only = ((unique_trigram_count * 48) as f64 * 1.5) as u64; // one hashmap, ~48 bytes per bucket
+    let ram_hashmap_with_positions = ((unique_trigram_count * 2 * 48) as f64 * 1.5) as u64; // two hashmaps
     let ram_file_content = raw_content_bytes; // InputFile content held in memory
-    let peak_ram = ram_file_postings + ram_positional_postings + ram_hashmap_overhead + ram_file_content;
+    let peak_ram = ram_file_postings + ram_hashmap_file_only + ram_file_content;
+    let peak_ram_with_positions =
+        ram_file_postings + ram_positional_postings + ram_hashmap_with_positions + ram_file_content;
 
     eprintln!();
     eprintln!("=== Index Size Breakdown ===");
     eprintln!("  trigrams.bin:");
-    eprintln!("    Trigram table:      {} ({} unique trigrams x {}B)",
-        human_bytes(trigram_table_bytes), unique_trigram_count, TRIGRAM_TABLE_ENTRY_SIZE);
-    eprintln!("    File postings:      {} (delta-varint encoded)",
-        human_bytes(file_posting_bytes));
-    eprintln!("    Positional postings:~{} (estimated, {} occurrences)",
-        human_bytes(positional_posting_bytes_est), total_trigram_occurrences);
-    eprintln!("    Subtotal:           ~{}", human_bytes(trigrams_bin));
+    eprintln!(
+        "    Trigram table:      {} ({} unique trigrams x {}B)",
+        human_bytes(trigram_table_bytes),
+        unique_trigram_count,
+        TRIGRAM_TABLE_ENTRY_SIZE
+    );
+    eprintln!(
+        "    File postings:      {} (delta-varint encoded)",
+        human_bytes(file_posting_bytes)
+    );
+    eprintln!(
+        "    Subtotal:            {}",
+        human_bytes(trigrams_bin_file_only)
+    );
+    eprintln!(
+        "    (with positions:    ~{}, {} occurrences)",
+        human_bytes(trigrams_bin_with_positions),
+        total_trigram_occurrences
+    );
     eprintln!();
-    eprintln!("  meta.bin:             {} ({} files x {}B + header)",
-        human_bytes(meta_bin), file_count, META_ENTRY_SIZE);
+    eprintln!(
+        "  meta.bin:             {} ({} files x {}B + header)",
+        human_bytes(meta_bin),
+        file_count,
+        META_ENTRY_SIZE
+    );
     eprintln!("  paths.bin:            {}", human_bytes(paths_bin));
-    eprintln!("  content.zst:          {} ({:.1}x compression)",
+    eprintln!(
+        "  content.zst:          {} ({:.1}x compression)",
         human_bytes(content_zst),
-        if compressed_total > 0 { raw_content_bytes as f64 / compressed_total as f64 } else { 0.0 });
-    eprintln!("  tombstones.bin:       {} (empty)", human_bytes(tombstone_bin));
+        if compressed_total > 0 {
+            raw_content_bytes as f64 / compressed_total as f64
+        } else {
+            0.0
+        }
+    );
+    eprintln!(
+        "  tombstones.bin:       {} (empty)",
+        human_bytes(tombstone_bin)
+    );
 
     eprintln!();
     eprintln!("=== Totals ===");
     eprintln!("  Raw content:          {}", human_bytes(raw_content_bytes));
     eprintln!("  Estimated index size: ~{}", human_bytes(total_index));
-    eprintln!("  Index / raw ratio:    {:.2}x", total_index as f64 / raw_content_bytes.max(1) as f64);
+    eprintln!(
+        "  Index / raw ratio:    {:.2}x",
+        total_index as f64 / raw_content_bytes.max(1) as f64
+    );
+    eprintln!(
+        "  (with positions:     ~{}, {:.2}x)",
+        human_bytes(total_index_with_positions),
+        total_index_with_positions as f64 / raw_content_bytes.max(1) as f64
+    );
     eprintln!();
     eprintln!("=== Peak RAM (single-segment build) ===");
-    eprintln!("  File content in memory:   {}", human_bytes(ram_file_content));
-    eprintln!("  File-level postings:      {}", human_bytes(ram_file_postings));
-    eprintln!("  Positional postings:      {}", human_bytes(ram_positional_postings));
-    eprintln!("  HashMap overhead:         ~{}", human_bytes(ram_hashmap_overhead));
+    eprintln!(
+        "  File content in memory:   {}",
+        human_bytes(ram_file_content)
+    );
+    eprintln!(
+        "  File-level postings:      {}",
+        human_bytes(ram_file_postings)
+    );
+    eprintln!(
+        "  HashMap overhead:         ~{}",
+        human_bytes(ram_hashmap_file_only)
+    );
     eprintln!("  Estimated peak total:     ~{}", human_bytes(peak_ram));
+    eprintln!(
+        "  (with positions:         ~{})",
+        human_bytes(peak_ram_with_positions)
+    );
 
     // Per-segment estimates: scale proportionally by content budget
     eprintln!();
@@ -245,16 +291,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let seg_ram_content = (ram_file_content as f64 * fraction) as u64;
         let seg_ram_file_postings = (ram_file_postings as f64 * fraction) as u64;
         let seg_ram_positional = (ram_positional_postings as f64 * fraction) as u64;
-        let seg_ram_hashmap = (ram_hashmap_overhead as f64 * fraction) as u64;
-        let seg_peak_ram = seg_ram_content + seg_ram_file_postings + seg_ram_positional + seg_ram_hashmap;
+        let seg_ram_hashmap = (ram_hashmap_file_only as f64 * fraction) as u64;
+        let seg_ram_hashmap_with_pos = (ram_hashmap_with_positions as f64 * fraction) as u64;
+        let seg_peak_ram = seg_ram_content + seg_ram_file_postings + seg_ram_hashmap;
+        let seg_peak_ram_with_pos =
+            seg_ram_content + seg_ram_file_postings + seg_ram_positional + seg_ram_hashmap_with_pos;
 
-        eprintln!("=== Peak RAM (budgeted, {} MB/segment) ===", segment_budget_mb);
+        eprintln!(
+            "=== Peak RAM (budgeted, {} MB/segment) ===",
+            segment_budget_mb
+        );
         eprintln!("  Estimated segments:       {num_segments}");
-        eprintln!("  File content in memory:   {}", human_bytes(seg_ram_content));
-        eprintln!("  File-level postings:      {}", human_bytes(seg_ram_file_postings));
-        eprintln!("  Positional postings:      {}", human_bytes(seg_ram_positional));
-        eprintln!("  HashMap overhead:         ~{}", human_bytes(seg_ram_hashmap));
+        eprintln!(
+            "  File content in memory:   {}",
+            human_bytes(seg_ram_content)
+        );
+        eprintln!(
+            "  File-level postings:      {}",
+            human_bytes(seg_ram_file_postings)
+        );
+        eprintln!(
+            "  HashMap overhead:         ~{}",
+            human_bytes(seg_ram_hashmap)
+        );
         eprintln!("  Estimated peak total:     ~{}", human_bytes(seg_peak_ram));
+        eprintln!(
+            "  (with positions:         ~{})",
+            human_bytes(seg_peak_ram_with_pos)
+        );
     } else {
         eprintln!("=== Peak RAM (budgeted) ===");
         eprintln!("  (no content or no budget to estimate)");

@@ -20,7 +20,6 @@ use indexrs_core::{
     SegmentManager, is_binary_content, is_binary_path, search_segments,
 };
 
-
 fn human_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = 1024 * 1024;
@@ -74,10 +73,7 @@ fn walk_and_collect(dir: &PathBuf) -> Result<Vec<InputFile>, Box<dyn std::error:
     Ok(files)
 }
 
-fn full_build(
-    dir: &PathBuf,
-    manager: &SegmentManager,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn full_build(dir: &PathBuf, manager: &SegmentManager) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("  Walking directory...");
     let files = walk_and_collect(dir)?;
     let file_count = files.len();
@@ -186,7 +182,11 @@ fn print_stats(
     lang_vec.sort_by(|a, b| b.1.cmp(&a.1));
 
     eprintln!();
-    eprintln!("  Content:          {} ({} lines)", human_bytes(total_content_bytes), total_lines);
+    eprintln!(
+        "  Content:          {} ({} lines)",
+        human_bytes(total_content_bytes),
+        total_lines
+    );
     eprintln!("  Languages:");
     for (lang, count) in &lang_vec {
         eprintln!("    {lang}: {count} files");
