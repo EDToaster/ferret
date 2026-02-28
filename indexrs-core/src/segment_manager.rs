@@ -337,70 +337,7 @@ impl SegmentManager {
     /// Returns `IndexError` if reading segments, building the merged segment,
     /// or deleting old directories fails.
     pub fn compact(&self) -> Result<(), IndexError> {
-        let _guard = self.write_lock.lock().unwrap();
-        let current_segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
-
-        // No-op if empty
-        if current_segments.is_empty() {
-            return Ok(());
-        }
-
-        // No-op if single segment with no tombstones
-        if current_segments.len() == 1 {
-            let ts = current_segments[0].load_tombstones()?;
-            if ts.is_empty() {
-                return Ok(());
-            }
-        }
-
-        // Collect all non-tombstoned entries from all segments
-        let mut merged_files: Vec<InputFile> = Vec::new();
-
-        for segment in &current_segments {
-            let tombstones = segment.load_tombstones()?;
-            let reader = segment.metadata_reader()?;
-
-            for entry_result in reader.iter_all() {
-                let entry: FileMetadata = entry_result?;
-
-                // Skip tombstoned entries
-                if tombstones.contains(entry.file_id) {
-                    continue;
-                }
-
-                // Read the original content from the content store
-                let content = segment
-                    .content_reader()
-                    .read_content(entry.content_offset, entry.content_len)?;
-
-                merged_files.push(InputFile {
-                    path: entry.path,
-                    content,
-                    mtime: entry.mtime_epoch_secs,
-                });
-            }
-        }
-
-        // Build the merged segment
-        let seg_id = self.next_segment_id();
-        let writer = SegmentWriter::new(&self.segments_dir, seg_id);
-        let merged_segment = writer.build(merged_files)?;
-
-        // Collect old directory paths before we publish (so we know what to delete)
-        let old_dirs: Vec<PathBuf> = current_segments
-            .iter()
-            .map(|s| s.dir_path().to_path_buf())
-            .collect();
-
-        // Publish the new segment list (just the merged segment)
-        self.state.publish(vec![Arc::new(merged_segment)]);
-
-        // Delete old segment directories (best-effort; errors are logged but not fatal)
-        for old_dir in old_dirs {
-            let _ = fs::remove_dir_all(&old_dir);
-        }
-
-        Ok(())
+        self.compact_with_budget(0)
     }
 
     /// Compact segments with a per-segment memory budget.
