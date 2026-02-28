@@ -67,6 +67,8 @@ fn verify_content_matches(content: &[u8], query: &str) -> Vec<LineMatch> {
                 line_number: (line_idx + 1) as u32, // 1-based
                 content: line.to_string(),
                 ranges,
+                context_before: vec![],
+                context_after: vec![],
             });
         }
     }

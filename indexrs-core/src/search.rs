@@ -38,6 +38,11 @@ pub struct LineMatch {
     /// Byte-offset ranges `(start, end)` within `content` that matched the query.
     /// Used for highlighting matched portions in the output.
     pub ranges: Vec<(usize, usize)>,
+    /// Context lines before this match (nearest lines first, i.e., index 0 is furthest).
+    /// Empty when context_lines=0.
+    pub context_before: Vec<ContextLine>,
+    /// Context lines after this match. Empty when context_lines=0.
+    pub context_after: Vec<ContextLine>,
 }
 
 /// A file that matched a search query, with its matching lines.
@@ -155,6 +160,8 @@ mod tests {
             line_number: 10,
             content: "fn parse_query(input: &str) -> Query".to_string(),
             ranges: vec![(3, 14), (31, 36)],
+            context_before: vec![],
+            context_after: vec![],
         };
         assert_eq!(line.line_number, 10);
         assert_eq!(line.ranges.len(), 2);
@@ -171,6 +178,8 @@ mod tests {
             line_number: 1,
             content: "use std::io;".to_string(),
             ranges: vec![],
+            context_before: vec![],
+            context_after: vec![],
         };
         assert!(line.ranges.is_empty());
     }
@@ -185,6 +194,8 @@ mod tests {
                 line_number: 5,
                 content: "pub struct FileId(u32);".to_string(),
                 ranges: vec![(11, 17)],
+                context_before: vec![],
+                context_after: vec![],
             }],
             score: 0.92,
         };
@@ -233,6 +244,8 @@ mod tests {
                 line_number: 2,
                 content: "fn main() {}".to_string(),
                 ranges: vec![(0, 2)],
+                context_before: vec![],
+                context_after: vec![],
             }],
             after: vec![ContextLine {
                 line_number: 3,
@@ -242,5 +255,45 @@ mod tests {
         assert_eq!(block.before.len(), 1);
         assert_eq!(block.matches.len(), 1);
         assert_eq!(block.after.len(), 1);
+    }
+
+    #[test]
+    fn test_line_match_with_context() {
+        let line = LineMatch {
+            line_number: 10,
+            content: "fn parse_query(input: &str) -> Query".to_string(),
+            ranges: vec![(3, 14)],
+            context_before: vec![
+                ContextLine {
+                    line_number: 8,
+                    content: "".to_string(),
+                },
+                ContextLine {
+                    line_number: 9,
+                    content: "/// Parse a query string.".to_string(),
+                },
+            ],
+            context_after: vec![ContextLine {
+                line_number: 11,
+                content: "    let tokens = tokenize(input);".to_string(),
+            }],
+        };
+        assert_eq!(line.context_before.len(), 2);
+        assert_eq!(line.context_after.len(), 1);
+        assert_eq!(line.context_before[1].line_number, 9);
+        assert_eq!(line.context_after[0].line_number, 11);
+    }
+
+    #[test]
+    fn test_line_match_default_empty_context() {
+        let line = LineMatch {
+            line_number: 1,
+            content: "use std::io;".to_string(),
+            ranges: vec![],
+            context_before: vec![],
+            context_after: vec![],
+        };
+        assert!(line.context_before.is_empty());
+        assert!(line.context_after.is_empty());
     }
 }
