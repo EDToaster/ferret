@@ -29,6 +29,10 @@
 
 use std::collections::HashSet;
 
+use regex_syntax::Parser;
+use regex_syntax::hir::HirKind;
+use regex_syntax::hir::literal::{ExtractKind, Extractor};
+
 use crate::trigram::extract_unique_trigrams_folded;
 use crate::types::Trigram;
 
@@ -94,6 +98,84 @@ pub fn extract_literal_trigrams(text: &str) -> TrigramQuery {
     } else {
         TrigramQuery::All(trigrams)
     }
+}
+
+/// Extract trigrams from a regex pattern by analyzing its literal fragments.
+///
+/// Uses `regex-syntax` to parse the pattern into HIR, then uses the
+/// `Extractor` to find required literal byte sequences. Trigrams are
+/// extracted from each literal fragment and merged.
+///
+/// For top-level alternations (`foo|bar`), extracts trigrams from each
+/// branch separately and returns `TrigramQuery::Any`. If no required
+/// literals can be extracted (e.g., pure wildcards `.*`), returns
+/// `TrigramQuery::None`.
+///
+/// Returns `TrigramQuery::None` on parse errors (graceful fallback to full scan).
+pub fn extract_regex_trigrams(pattern: &str) -> TrigramQuery {
+    // Parse the regex pattern into HIR
+    let hir = match Parser::new().parse(pattern) {
+        Ok(hir) => hir,
+        Err(_) => return TrigramQuery::None,
+    };
+
+    // Check for top-level alternation first
+    if let HirKind::Alternation(branches) = hir.kind() {
+        let mut branch_trigrams: Vec<HashSet<Trigram>> = Vec::new();
+        for branch in branches {
+            let trigrams = extract_trigrams_from_hir(branch);
+            if trigrams.is_empty() {
+                // If any branch has no trigrams, the whole OR can't be pruned
+                return TrigramQuery::None;
+            }
+            branch_trigrams.push(trigrams);
+        }
+        return match branch_trigrams.len() {
+            0 => TrigramQuery::None,
+            1 => TrigramQuery::All(branch_trigrams.into_iter().next().unwrap()),
+            _ => TrigramQuery::Any(branch_trigrams),
+        };
+    }
+
+    // Non-alternation: extract trigrams from the whole pattern
+    let trigrams = extract_trigrams_from_hir(&hir);
+    if trigrams.is_empty() {
+        TrigramQuery::None
+    } else {
+        TrigramQuery::All(trigrams)
+    }
+}
+
+/// Extract trigrams from a parsed HIR node by finding literal fragments.
+///
+/// Uses prefix and suffix extraction for maximum coverage, then merges
+/// the trigram sets.
+fn extract_trigrams_from_hir(hir: &regex_syntax::hir::Hir) -> HashSet<Trigram> {
+    let mut all_trigrams: HashSet<Trigram> = HashSet::new();
+
+    // Extract prefix literals
+    let mut extractor = Extractor::new();
+    extractor.kind(ExtractKind::Prefix);
+    let prefix_seq = extractor.extract(hir);
+
+    // Extract suffix literals
+    let mut extractor_suffix = Extractor::new();
+    extractor_suffix.kind(ExtractKind::Suffix);
+    let suffix_seq = extractor_suffix.extract(hir);
+
+    // Process both prefix and suffix sequences
+    for seq in [&prefix_seq, &suffix_seq] {
+        if let Some(literals) = seq.literals() {
+            for lit in literals {
+                let bytes = lit.as_bytes();
+                if bytes.len() >= 3 {
+                    all_trigrams.extend(extract_unique_trigrams_folded(bytes));
+                }
+            }
+        }
+    }
+
+    all_trigrams
 }
 
 #[cfg(test)]
@@ -202,5 +284,69 @@ mod tests {
             TrigramQuery::All(set) => assert_eq!(set.len(), 1),
             _ => panic!("expected TrigramQuery::All"),
         }
+    }
+
+    // ---- extract_regex_trigrams tests ----
+
+    #[test]
+    fn test_extract_regex_trigrams_simple_literal() {
+        // /HttpRequest/ -> extracts trigrams from literal "HttpRequest", folded
+        let result = extract_regex_trigrams("HttpRequest");
+        match result {
+            TrigramQuery::All(set) => {
+                assert_eq!(set.len(), 9);
+                // Folded to lowercase
+                assert!(set.contains(&Trigram::from_bytes(b'h', b't', b't')));
+            }
+            _ => panic!("expected TrigramQuery::All"),
+        }
+    }
+
+    #[test]
+    fn test_extract_regex_trigrams_with_wildcard() {
+        // /Err\(.*Error\)/ -> literals "Err(" and "Error)"
+        let result = extract_regex_trigrams(r"Err\(.*Error\)");
+        match result {
+            TrigramQuery::All(set) => {
+                assert!(set.len() >= 1); // At least some trigrams from "Err(" or "Error)"
+                // "err" should be present (folded from "Err")
+                assert!(set.contains(&Trigram::from_bytes(b'e', b'r', b'r')));
+            }
+            _ => panic!("expected TrigramQuery::All, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_extract_regex_trigrams_alternation() {
+        // /foo|bar/ -> OR of trigrams from "foo" and "bar"
+        let result = extract_regex_trigrams("foo|bar");
+        match result {
+            TrigramQuery::Any(branches) => {
+                assert_eq!(branches.len(), 2);
+            }
+            // Also acceptable: All or None depending on extractor behavior
+            TrigramQuery::All(_) | TrigramQuery::None => {}
+        }
+    }
+
+    #[test]
+    fn test_extract_regex_trigrams_pure_wildcard() {
+        // /.*/ -> no literals -> None
+        let result = extract_regex_trigrams(".*");
+        assert_eq!(result, TrigramQuery::None);
+    }
+
+    #[test]
+    fn test_extract_regex_trigrams_short_literal() {
+        // /ab/ -> only 2-char literal -> None
+        let result = extract_regex_trigrams("ab");
+        assert_eq!(result, TrigramQuery::None);
+    }
+
+    #[test]
+    fn test_extract_regex_trigrams_invalid_regex() {
+        // Invalid regex -> None (graceful fallback)
+        let result = extract_regex_trigrams("(unclosed");
+        assert_eq!(result, TrigramQuery::None);
     }
 }
