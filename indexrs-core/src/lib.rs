@@ -59,11 +59,11 @@ pub use search::{ContextBlock, ContextLine, FileMatch, LineMatch, MatchPattern, 
 pub use segment::{InputFile, Segment, SegmentWriter};
 pub use segment_manager::SegmentManager;
 pub use tombstone::{TombstoneSet, needs_new_entry, needs_tombstone};
-pub use verify::ContentVerifier;
 pub use trigram::{
     ascii_fold_byte, extract_trigrams, extract_trigrams_folded, extract_unique_trigrams,
     extract_unique_trigrams_folded,
 };
 pub use types::{FileId, Language, SegmentId, SymbolKind, Trigram};
+pub use verify::ContentVerifier;
 pub use walker::{DirectoryWalkerBuilder, WalkedFile, Walker};
 pub use watcher::FileWatcher;

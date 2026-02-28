@@ -344,8 +344,7 @@ pub fn search_segments_with_pattern(
 
     for segment in snapshot.iter() {
         let tombstones = segment.load_tombstones()?;
-        let file_matches =
-            search_single_segment_with_pattern(segment, pattern, &tombstones)?;
+        let file_matches = search_single_segment_with_pattern(segment, pattern, &tombstones)?;
 
         for fm in file_matches {
             let seg_id = segment.segment_id();

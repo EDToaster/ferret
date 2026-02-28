@@ -58,6 +58,7 @@ impl LineIndex {
     }
 
     /// Return the 1-based column number for a byte offset.
+    #[allow(dead_code)]
     fn column_at_byte(&self, byte_offset: usize) -> u32 {
         let line_0 = self.newline_offsets.partition_point(|&nl| nl < byte_offset);
         if line_0 == 0 {
@@ -267,7 +268,7 @@ impl ContentVerifier {
         let mut groups: Vec<Vec<LineMatch>> = Vec::new();
 
         for m in line_matches {
-            let should_merge = groups.last().map_or(false, |group| {
+            let should_merge = groups.last().is_some_and(|group| {
                 let last_line = group.last().unwrap().line_number;
                 // Merge if the gap between the last match and this match
                 // is within 2 * context_lines (their contexts would overlap)
@@ -490,10 +491,8 @@ mod tests {
     #[test]
     fn test_verify_case_insensitive() {
         let content = b"Hello World\nhello world\nHELLO WORLD\n";
-        let verifier = ContentVerifier::new(
-            MatchPattern::LiteralCaseInsensitive("hello".to_string()),
-            0,
-        );
+        let verifier =
+            ContentVerifier::new(MatchPattern::LiteralCaseInsensitive("hello".to_string()), 0);
         let result = verifier.verify(content);
         assert_eq!(result.len(), 3);
     }
@@ -501,10 +500,8 @@ mod tests {
     #[test]
     fn test_verify_case_insensitive_no_match() {
         let content = b"foo bar baz\n";
-        let verifier = ContentVerifier::new(
-            MatchPattern::LiteralCaseInsensitive("qux".to_string()),
-            0,
-        );
+        let verifier =
+            ContentVerifier::new(MatchPattern::LiteralCaseInsensitive("qux".to_string()), 0);
         let result = verifier.verify(content);
         assert!(result.is_empty());
     }
@@ -588,5 +585,79 @@ mod tests {
         let verifier = ContentVerifier::new(MatchPattern::Literal("NOMATCH".to_string()), 2);
         let blocks = verifier.verify_with_context(content);
         assert!(blocks.is_empty());
+    }
+
+    // ---- Edge cases ----
+
+    #[test]
+    fn test_verify_literal_overlapping_matches() {
+        // "aaa" in "aaaa" should find positions 0 and 1
+        let content = b"aaaa\n";
+        let verifier = ContentVerifier::new(MatchPattern::Literal("aaa".to_string()), 0);
+        let result = verifier.verify(content);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].ranges.len(), 2);
+        assert_eq!(result[0].ranges[0], (0, 3));
+        assert_eq!(result[0].ranges[1], (1, 4));
+    }
+
+    #[test]
+    fn test_verify_regex_multiline_not_crossing_lines() {
+        // Regex matches should not span across lines
+        let content = b"fn main\n() {}\n";
+        let verifier = ContentVerifier::new(MatchPattern::Regex(r"fn\s+\w+".to_string()), 0);
+        let result = verifier.verify(content);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].line_number, 1);
+        // "fn main" matches on line 1
+        assert_eq!(result[0].ranges[0], (0, 7));
+    }
+
+    #[test]
+    fn test_verify_non_utf8_content() {
+        // Binary-ish content with invalid UTF-8 should still work via lossy conversion
+        let content = &[0xFF, 0xFE, b'\n', b'h', b'e', b'l', b'l', b'o', b'\n'];
+        let verifier = ContentVerifier::new(MatchPattern::Literal("hello".to_string()), 0);
+        let result = verifier.verify(content);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].line_number, 2);
+    }
+
+    #[test]
+    fn test_verify_regex_invalid_pattern() {
+        // Invalid regex should return no matches (not panic)
+        let content = b"fn main() {}\n";
+        let verifier = ContentVerifier::new(MatchPattern::Regex("[invalid".to_string()), 0);
+        let result = verifier.verify(content);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_verify_literal_empty_pattern() {
+        let content = b"fn main() {}\n";
+        let verifier = ContentVerifier::new(MatchPattern::Literal(String::new()), 0);
+        let result = verifier.verify(content);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_context_large_context_window() {
+        // Context window larger than file should clamp to file boundaries
+        let content = b"line 1\nMATCH\nline 3\n";
+        let verifier = ContentVerifier::new(MatchPattern::Literal("MATCH".to_string()), 100);
+        let blocks = verifier.verify_with_context(content);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].before.len(), 1); // only line 1
+        assert_eq!(blocks[0].after.len(), 1); // only line 3
+    }
+
+    #[test]
+    fn test_context_three_close_matches_merge() {
+        let content = b"MATCH1\nMATCH2\nMATCH3\n";
+        let verifier = ContentVerifier::new(MatchPattern::Literal("MATCH".to_string()), 1);
+        let blocks = verifier.verify_with_context(content);
+        // All 3 matches are adjacent, should merge into 1 block
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].matches.len(), 3);
     }
 }
