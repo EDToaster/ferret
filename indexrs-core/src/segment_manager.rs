@@ -31,6 +31,14 @@ const DEFAULT_MAX_SEGMENTS: usize = 10;
 /// Default tombstone ratio threshold for compaction.
 const DEFAULT_MAX_TOMBSTONE_RATIO: f32 = 0.30;
 
+/// Default per-segment size budget for compaction (256 MB of uncompressed content).
+///
+/// This bounds peak memory during compaction to ~256 MB for file content plus
+/// overhead for posting lists (~2x content size for positional postings, much
+/// less for file-level postings). A 256 MB budget keeps total compaction RAM
+/// under ~1 GB on typical codebases.
+const DEFAULT_COMPACTION_BUDGET: usize = 256 * 1024 * 1024;
+
 /// Segment lifecycle manager.
 ///
 /// The primary entry point for all indexing operations. Owns the `IndexState`
@@ -439,7 +447,7 @@ impl SegmentManager {
     /// to work, since the spawned task needs a `'static` reference.
     pub fn compact_background(self: &Arc<Self>) -> tokio::task::JoinHandle<Result<(), IndexError>> {
         let this = Arc::clone(self);
-        tokio::spawn(async move { this.compact() })
+        tokio::spawn(async move { this.compact_with_budget(DEFAULT_COMPACTION_BUDGET) })
     }
 }
 
