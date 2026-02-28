@@ -12,27 +12,18 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use indexrs_core::{
-    // M1: indexing pipeline
-    ContentStoreReader,
-    ContentStoreWriter,
     DEFAULT_MAX_FILE_SIZE,
-    // M2: file discovery
+    // M2: file discovery & classification
     DirectoryWalkerBuilder,
-    // M0: types
-    FileId,
-    FileMetadata,
     // M2: change detection
     GitChangeDetector,
+    // M3: segment-based indexing & search
+    InputFile,
     Language,
-    MetadataBuilder,
-    PostingListBuilder,
-    TrigramIndexReader,
-    TrigramIndexWriter,
-    // M1: search
-    find_candidates,
-    // M2: binary detection
+    SegmentManager,
     is_binary_content,
     is_binary_path,
+    search_segments,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -43,17 +34,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Demos the full indexrs pipeline:");
         eprintln!("  1. Directory walking with .gitignore support (M2)");
         eprintln!("  2. Binary file detection and language classification (M2)");
-        eprintln!("  3. Trigram index build: posting lists + content store (M1)");
-        eprintln!("  4. Trigram search with candidate verification (M1)");
+        eprintln!("  3. Segment-based index build via SegmentManager (M3)");
+        eprintln!("  4. Multi-segment search with ranked results (M4)");
         eprintln!("  5. Git-based change detection (M2)");
         std::process::exit(1);
     }
     let dir = PathBuf::from(&args[1]);
     let query = &args[2];
 
-    // Temp directory for index files (auto-cleaned on drop)
+    // Use a temp directory for the index (auto-cleaned on drop)
     let index_tmp = tempfile::tempdir()?;
-    let index_dir = index_tmp.path();
+    let index_dir = index_tmp.path().join(".indexrs");
 
     // ── Phase 1: Walk directory (M2: DirectoryWalkerBuilder) ─────────────
     let t0 = Instant::now();
@@ -71,24 +62,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let t1 = Instant::now();
     eprintln!("\n=== Phase 2: Binary Detection & Language Classification ===");
 
-    let mut text_files: Vec<(PathBuf, Vec<u8>, Language)> = Vec::new();
+    let mut input_files: Vec<InputFile> = Vec::new();
+    let mut lang_counts: std::collections::HashMap<Language, u32> =
+        std::collections::HashMap::new();
     let mut skipped_binary = 0u32;
     let mut skipped_large = 0u32;
 
     for walked in &walked_files {
-        // Skip binary extensions without reading
         if is_binary_path(&walked.path) {
             skipped_binary += 1;
             continue;
         }
 
-        // Skip files over size limit
         if walked.metadata.len() > DEFAULT_MAX_FILE_SIZE {
             skipped_large += 1;
             continue;
         }
 
-        // Read and check content for binary data
         let content = match std::fs::read(&walked.path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -98,23 +88,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        // Detect language (M2: Language::from_path)
         let lang = Language::from_path(&walked.path);
-        text_files.push((walked.path.clone(), content, lang));
+        *lang_counts.entry(lang).or_default() += 1;
+
+        let rel_path = walked.path.strip_prefix(&dir).unwrap_or(&walked.path);
+        let mtime = walked
+            .metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        input_files.push(InputFile {
+            path: rel_path.to_string_lossy().to_string(),
+            content,
+            mtime,
+        });
     }
 
-    // Show language breakdown
-    let mut lang_counts: std::collections::HashMap<Language, u32> =
-        std::collections::HashMap::new();
-    for (_, _, lang) in &text_files {
-        *lang_counts.entry(*lang).or_default() += 1;
-    }
     let mut lang_vec: Vec<_> = lang_counts.into_iter().collect();
     lang_vec.sort_by(|a, b| b.1.cmp(&a.1));
 
     eprintln!(
         "Indexable: {} text files, skipped: {} binary, {} too large",
-        text_files.len(),
+        input_files.len(),
         skipped_binary,
         skipped_large
     );
@@ -124,87 +122,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     eprintln!("Classified in {:.1?}", t1.elapsed());
 
-    // ── Phase 3: Build index (M1: posting lists + content store + metadata) ─
+    // ── Phase 3: Build index (M3: SegmentManager) ───────────────────────
     let t2 = Instant::now();
-    eprintln!("\n=== Phase 3: Index Build ===");
+    eprintln!("\n=== Phase 3: Segment Build ===");
 
-    let mut posting_builder = PostingListBuilder::file_only();
-    let mut metadata_builder = MetadataBuilder::new();
-    let mut content_writer = ContentStoreWriter::new(&index_dir.join("content.zst"))?;
+    let file_count = input_files.len();
+    let manager = SegmentManager::new(&index_dir)?;
+    manager.index_files(input_files)?;
 
-    for (i, (path, content, lang)) in text_files.iter().enumerate() {
-        let file_id = FileId(i as u32);
-        let rel_path = path.strip_prefix(&dir).unwrap_or(path);
-        posting_builder.add_file(file_id, content);
-        let (offset, compressed_len) = content_writer.add_content(content)?;
-        let hash = blake3::hash(content);
-        let mut content_hash = [0u8; 16];
-        content_hash.copy_from_slice(&hash.as_bytes()[..16]);
-
-        metadata_builder.add_file(FileMetadata {
-            file_id,
-            path: rel_path.to_string_lossy().to_string(),
-            content_hash,
-            language: *lang,
-            size_bytes: content.len() as u32,
-            mtime_epoch_secs: 0,
-            line_count: content.iter().filter(|&&b| b == b'\n').count() as u32,
-            content_offset: offset,
-            content_len: compressed_len,
-        });
-    }
-
-    posting_builder.finalize();
-    content_writer.finish()?;
-    TrigramIndexWriter::write(&posting_builder, &index_dir.join("trigrams.bin"))?;
-
+    let snap = manager.snapshot();
     eprintln!(
-        "Built index: {} trigrams across {} files in {:.1?}",
-        posting_builder.trigram_count(),
-        metadata_builder.file_count(),
+        "Built {} segment(s) covering {} files in {:.1?}",
+        snap.len(),
+        file_count,
         t2.elapsed()
     );
 
-    // ── Phase 4: Search (M1: trigram lookup + intersection + verification) ───
+    // ── Phase 4: Search (M3+M4: multi-segment search with ranking) ──────
     let t3 = Instant::now();
     eprintln!("\n=== Phase 4: Search ===");
-    eprintln!("Query: {:?}", query);
+    eprintln!("Query: {query:?}");
 
-    let reader = TrigramIndexReader::open(&index_dir.join("trigrams.bin"))?;
-    let content_reader = ContentStoreReader::open(&index_dir.join("content.zst"))?;
-    let candidates = find_candidates(&reader, query)?;
+    let result = search_segments(&snap, query)?;
 
-    if candidates.is_empty() {
+    if result.total_match_count == 0 {
         println!("No results found.");
     } else {
-        let re = regex::Regex::new(&regex::escape(query))?;
-        let mut match_count = 0;
-
-        for file_id in &candidates {
-            let meta = match metadata_builder.get(*file_id) {
-                Some(m) => m,
-                None => continue,
-            };
-            let content = content_reader.read_content(meta.content_offset, meta.content_len)?;
-            let text = String::from_utf8_lossy(&content);
-
-            for (line_num, line) in text.lines().enumerate() {
-                if re.is_match(line) {
-                    println!("{}:{}:{}", meta.path, line_num + 1, line);
-                    match_count += 1;
-                }
-            }
-        }
-
+        // SearchResult implements Display with ranked output
+        print!("{result}");
         eprintln!(
-            "\n{} matches in {} candidate files (searched in {:.1?})",
-            match_count,
-            candidates.len(),
-            t3.elapsed()
+            "\n{} matches in {} files (searched in {:.1?})",
+            result.total_match_count, result.total_file_count, t3.elapsed()
         );
     }
 
-    // ── Phase 5: Git change detection (M2) ──────────────────────────────────
+    // ── Phase 5: Git change detection (M2) ──────────────────────────────
     eprintln!("\n=== Phase 5: Git Change Detection ===");
 
     let abs_dir = std::fs::canonicalize(&dir)?;
