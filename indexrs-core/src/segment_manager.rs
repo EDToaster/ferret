@@ -301,9 +301,10 @@ impl SegmentManager {
                 // Finding 8: Validate path to prevent path traversal attacks.
                 // Since the file may not exist yet we cannot canonicalize it,
                 // so we check that the path has no `..` components and is not absolute.
-                let has_dotdot = change.path.components().any(|c| {
-                    c == std::path::Component::ParentDir
-                });
+                let has_dotdot = change
+                    .path
+                    .components()
+                    .any(|c| c == std::path::Component::ParentDir);
                 if has_dotdot || change.path.is_absolute() {
                     tracing::warn!(
                         path = %change.path.display(),

@@ -160,15 +160,11 @@ impl ContentStoreReader {
     /// - The compressed data cannot be decompressed (corrupted block)
     pub fn read_content(&self, offset: u64, compressed_len: u32) -> crate::Result<Vec<u8>> {
         let start = usize::try_from(offset).map_err(|_| {
-            IndexError::IndexCorruption(format!(
-                "content offset {offset} exceeds address space"
-            ))
+            IndexError::IndexCorruption(format!("content offset {offset} exceeds address space"))
         })?;
         let clen = compressed_len as usize;
         let end = start.checked_add(clen).ok_or_else(|| {
-            IndexError::IndexCorruption(format!(
-                "content range overflow: {start} + {clen}"
-            ))
+            IndexError::IndexCorruption(format!("content range overflow: {start} + {clen}"))
         })?;
 
         if end > self.mmap.len() {

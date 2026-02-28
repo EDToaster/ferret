@@ -281,9 +281,7 @@ impl ContentVerifier {
                 // is within 2 * context_lines (their contexts would overlap).
                 // Use u64 arithmetic to avoid overflow.
                 (m.line_number as u64)
-                    <= (last_line as u64)
-                        + 2u64 * (self.context_lines as u64)
-                        + 1
+                    <= (last_line as u64) + 2u64 * (self.context_lines as u64) + 1
             });
 
             if should_merge {

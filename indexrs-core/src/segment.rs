@@ -262,9 +262,7 @@ impl SegmentWriter {
 
         for (i, input) in files.iter().enumerate() {
             let file_id = FileId(u32::try_from(i).map_err(|_| {
-                IndexError::IndexCorruption(
-                    "too many files for segment (>4B)".to_string(),
-                )
+                IndexError::IndexCorruption("too many files for segment (>4B)".to_string())
             })?);
 
             // Hash content with blake3, truncate to 16 bytes
