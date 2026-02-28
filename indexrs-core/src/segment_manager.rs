@@ -103,14 +103,14 @@ impl SegmentManager {
         for entry in entries {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if let Some(id_str) = name.strip_prefix("seg_") {
-                if let Ok(id) = id_str.parse::<u32>() {
-                    let segment = Segment::open(&entry.path(), SegmentId(id))?;
-                    if id >= max_id {
-                        max_id = id + 1;
-                    }
-                    segments.push(Arc::new(segment));
+            if let Some(id_str) = name.strip_prefix("seg_")
+                && let Ok(id) = id_str.parse::<u32>()
+            {
+                let segment = Segment::open(&entry.path(), SegmentId(id))?;
+                if id >= max_id {
+                    max_id = id + 1;
                 }
+                segments.push(Arc::new(segment));
             }
         }
 
