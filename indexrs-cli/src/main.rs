@@ -1,4 +1,5 @@
 mod args;
+mod color;
 
 use args::{Cli, Command};
 use clap::Parser;
