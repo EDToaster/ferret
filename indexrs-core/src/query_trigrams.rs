@@ -29,6 +29,7 @@
 
 use std::collections::HashSet;
 
+use crate::trigram::extract_unique_trigrams_folded;
 use crate::types::Trigram;
 
 /// Describes the trigram lookup strategy for a parsed query.
@@ -74,6 +75,27 @@ impl TrigramQuery {
     }
 }
 
+/// Extract trigrams from a literal search string.
+///
+/// Always produces lowercase (ASCII-folded) trigrams to match the case-folded
+/// index. The `case_sensitive` flag on query types affects verification only,
+/// not trigram extraction.
+///
+/// Returns `TrigramQuery::All` with the unique trigram set if the string
+/// is at least 3 bytes long, or `TrigramQuery::None` if too short.
+pub fn extract_literal_trigrams(text: &str) -> TrigramQuery {
+    let bytes = text.as_bytes();
+    if bytes.len() < 3 {
+        return TrigramQuery::None;
+    }
+    let trigrams = extract_unique_trigrams_folded(bytes);
+    if trigrams.is_empty() {
+        TrigramQuery::None
+    } else {
+        TrigramQuery::All(trigrams)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,5 +134,73 @@ mod tests {
     #[test]
     fn test_trigram_query_count_none() {
         assert_eq!(TrigramQuery::None.trigram_count(), 0);
+    }
+
+    // ---- extract_literal_trigrams tests ----
+
+    #[test]
+    fn test_extract_literal_trigrams_lowercase() {
+        // "httprequest" -> 9 trigrams, all lowercase
+        let result = extract_literal_trigrams("httprequest");
+        match result {
+            TrigramQuery::All(set) => {
+                assert_eq!(set.len(), 9);
+                assert!(set.contains(&Trigram::from_bytes(b'h', b't', b't')));
+                assert!(set.contains(&Trigram::from_bytes(b'e', b's', b't')));
+            }
+            _ => panic!("expected TrigramQuery::All"),
+        }
+    }
+
+    #[test]
+    fn test_extract_literal_trigrams_mixed_case_folded() {
+        // "HttpRequest" -> folded to lowercase trigrams
+        // Same trigrams as "httprequest" since index is case-folded
+        let result = extract_literal_trigrams("HttpRequest");
+        match result {
+            TrigramQuery::All(set) => {
+                assert_eq!(set.len(), 9);
+                // All trigrams are lowercase (folded)
+                assert!(set.contains(&Trigram::from_bytes(b'h', b't', b't')));
+                assert!(set.contains(&Trigram::from_bytes(b'e', b's', b't')));
+                // No uppercase trigrams
+                assert!(!set.contains(&Trigram::from_bytes(b'H', b't', b't')));
+            }
+            _ => panic!("expected TrigramQuery::All"),
+        }
+    }
+
+    #[test]
+    fn test_extract_literal_trigrams_short() {
+        // "fn" is only 2 chars -> no trigrams -> None
+        assert_eq!(extract_literal_trigrams("fn"), TrigramQuery::None);
+    }
+
+    #[test]
+    fn test_extract_literal_trigrams_exact_three() {
+        // "abc" -> exactly 1 trigram
+        let result = extract_literal_trigrams("abc");
+        match result {
+            TrigramQuery::All(set) => {
+                assert_eq!(set.len(), 1);
+                assert!(set.contains(&Trigram::from_bytes(b'a', b'b', b'c')));
+            }
+            _ => panic!("expected TrigramQuery::All"),
+        }
+    }
+
+    #[test]
+    fn test_extract_literal_trigrams_empty() {
+        assert_eq!(extract_literal_trigrams(""), TrigramQuery::None);
+    }
+
+    #[test]
+    fn test_extract_literal_trigrams_deduplicates() {
+        // "aaaa" has trigrams: "aaa", "aaa" -> deduplicated to 1
+        let result = extract_literal_trigrams("aaaa");
+        match result {
+            TrigramQuery::All(set) => assert_eq!(set.len(), 1),
+            _ => panic!("expected TrigramQuery::All"),
+        }
     }
 }
