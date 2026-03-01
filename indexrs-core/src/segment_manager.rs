@@ -115,7 +115,14 @@ impl SegmentManager {
         }
 
         if !segments.is_empty() {
+            tracing::info!(
+                segment_count = segments.len(),
+                next_id = max_id,
+                "loaded existing segments from disk"
+            );
             state.publish(segments);
+        } else {
+            tracing::info!("no existing segments found, starting fresh");
         }
 
         Ok(SegmentManager {
@@ -205,11 +212,22 @@ impl SegmentManager {
         files: Vec<InputFile>,
         max_segment_bytes: usize,
     ) -> Result<(), IndexError> {
+        let file_count = files.len();
+        let total_bytes: usize = files.iter().map(|f| f.content.len()).sum();
+        tracing::info!(
+            file_count,
+            total_bytes,
+            max_segment_bytes,
+            "indexing files"
+        );
+        let start = std::time::Instant::now();
+
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut batch: Vec<InputFile> = Vec::new();
         let mut batch_bytes: usize = 0;
         let mut segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
+        let segments_before = segments.len();
 
         for file in files {
             let content_len = file.content.len();
@@ -231,7 +249,15 @@ impl SegmentManager {
             segments.push(Arc::new(writer.build(batch)?));
         }
 
+        let new_segment_count = segments.len() - segments_before;
         self.state.publish(segments);
+
+        tracing::info!(
+            file_count,
+            new_segment_count,
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            "indexing complete"
+        );
         Ok(())
     }
 
@@ -323,6 +349,9 @@ impl SegmentManager {
             return Ok(());
         }
 
+        tracing::info!(change_count = changes.len(), "applying changes");
+        let start = std::time::Instant::now();
+
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
         let current_segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
 
@@ -395,14 +424,17 @@ impl SegmentManager {
         // on crash: if we tombstone first and crash before building the
         // replacement segment, those files would be permanently lost.
         let mut updated_segments = current_segments.clone();
+        let new_file_count = new_files.len();
         if !new_files.is_empty() {
             let seg_id = self.next_segment_id()?;
+            tracing::debug!(segment_id = seg_id.0, new_file_count, "building replacement segment");
             let writer = SegmentWriter::new(&self.segments_dir, seg_id);
             let segment = writer.build(new_files)?;
             updated_segments.push(Arc::new(segment));
         }
 
         // Write tombstones to affected segments (safe now — replacement exists on disk)
+        let tombstone_count: u32 = tombstone_updates.values().map(|ts| ts.len()).sum();
         for (seg_idx, new_tombstones) in &tombstone_updates {
             let segment = &current_segments[*seg_idx];
             let mut existing = segment.load_tombstones()?;
@@ -411,6 +443,15 @@ impl SegmentManager {
         }
 
         self.state.publish(updated_segments);
+
+        tracing::info!(
+            change_count = changes.len(),
+            tombstone_count,
+            new_file_count,
+            segments_affected = tombstone_updates.len(),
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            "changes applied"
+        );
         Ok(())
     }
 
@@ -481,15 +522,24 @@ impl SegmentManager {
         let current_segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
 
         if current_segments.is_empty() {
+            tracing::debug!("compaction skipped: no segments");
             return Ok(());
         }
 
         if current_segments.len() == 1 {
             let ts = current_segments[0].load_tombstones()?;
             if ts.is_empty() {
+                tracing::debug!("compaction skipped: single segment with no tombstones");
                 return Ok(());
             }
         }
+
+        tracing::info!(
+            input_segments = current_segments.len(),
+            max_segment_bytes,
+            "compaction starting"
+        );
+        let start = std::time::Instant::now();
 
         // Collect live entries, flushing to a new segment when budget is exceeded
         let mut batch: Vec<InputFile> = Vec::new();
@@ -541,12 +591,21 @@ impl SegmentManager {
             .map(|s| s.dir_path().to_path_buf())
             .collect();
 
+        let output_segment_count = new_segments.len();
         self.state.publish(new_segments);
 
-        for old_dir in old_dirs {
-            let _ = fs::remove_dir_all(&old_dir);
+        for old_dir in &old_dirs {
+            if let Err(e) = fs::remove_dir_all(old_dir) {
+                tracing::warn!(path = %old_dir.display(), error = %e, "failed to remove old segment directory");
+            }
         }
 
+        tracing::info!(
+            input_segments = old_dirs.len(),
+            output_segments = output_segment_count,
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            "compaction complete"
+        );
         Ok(())
     }
 
@@ -560,8 +619,15 @@ impl SegmentManager {
     /// The `SegmentManager` must be wrapped in an `Arc` for this method
     /// to work, since the spawned task needs a `'static` reference.
     pub fn compact_background(self: &Arc<Self>) -> tokio::task::JoinHandle<Result<(), IndexError>> {
+        tracing::info!("spawning background compaction task");
         let this = Arc::clone(self);
-        tokio::spawn(async move { this.compact_with_budget(DEFAULT_COMPACTION_BUDGET) })
+        tokio::spawn(async move {
+            let result = this.compact_with_budget(DEFAULT_COMPACTION_BUDGET);
+            if let Err(ref e) = result {
+                tracing::error!(error = %e, "background compaction failed");
+            }
+            result
+        })
     }
 }
 

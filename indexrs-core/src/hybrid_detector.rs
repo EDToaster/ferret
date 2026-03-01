@@ -71,6 +71,12 @@ impl HybridDetector {
     /// Returns a channel receiver that yields batches of [`ChangeEvent`]s.
     /// Events from both sources are de-duplicated by path before sending.
     pub fn start(&mut self) -> Result<mpsc::Receiver<Vec<ChangeEvent>>> {
+        tracing::info!(
+            root = %self.root.display(),
+            git_poll_interval_secs = self.git_poll_interval.as_secs(),
+            "starting hybrid change detector"
+        );
+
         let (tx, rx) = mpsc::channel();
 
         // Start the file watcher.
@@ -88,10 +94,17 @@ impl HybridDetector {
             let poll_step = Duration::from_millis(100);
 
             // Run an initial git diff on startup.
-            if let Ok(events) = git.detect_changes()
-                && !events.is_empty()
-            {
-                let _ = tx.send(dedup_events(events));
+            match git.detect_changes() {
+                Ok(events) if !events.is_empty() => {
+                    tracing::info!(event_count = events.len(), "initial git diff found changes");
+                    let _ = tx.send(dedup_events(events));
+                }
+                Ok(_) => {
+                    tracing::debug!("initial git diff found no changes");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "initial git diff failed");
+                }
             }
 
             let mut elapsed = Duration::ZERO;
@@ -103,18 +116,26 @@ impl HybridDetector {
                     match watcher_rx.try_recv() {
                         Ok(events) => {
                             let deduped = dedup_events(events);
-                            if !deduped.is_empty() && tx.send(deduped).is_err() {
-                                watcher_disconnected = true;
-                                break;
+                            if !deduped.is_empty() {
+                                tracing::debug!(event_count = deduped.len(), "forwarding watcher events");
+                                if tx.send(deduped).is_err() {
+                                    watcher_disconnected = true;
+                                    break;
+                                }
                             }
                         }
                         Err(mpsc::TryRecvError::Disconnected) => {
+                            tracing::warn!("watcher channel disconnected, running final git scan");
                             // Watcher channel closed — do one final git scan, then exit
                             // to avoid hammering git in a tight loop.
-                            if let Ok(events) = git.detect_changes()
-                                && !events.is_empty()
-                            {
-                                let _ = tx.send(dedup_events(events));
+                            match git.detect_changes() {
+                                Ok(events) if !events.is_empty() => {
+                                    let _ = tx.send(dedup_events(events));
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "final git diff scan failed");
+                                }
+                                _ => {}
                             }
                             watcher_disconnected = true;
                             break;
@@ -128,20 +149,31 @@ impl HybridDetector {
 
                 // Check reindex flag.
                 if reindex_flag.swap(false, Ordering::SeqCst) {
-                    if let Ok(events) = git.detect_changes()
-                        && !events.is_empty()
-                    {
-                        let _ = tx.send(dedup_events(events));
+                    tracing::debug!("reindex requested, running git diff");
+                    match git.detect_changes() {
+                        Ok(events) if !events.is_empty() => {
+                            tracing::debug!(event_count = events.len(), "reindex git diff found changes");
+                            let _ = tx.send(dedup_events(events));
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "reindex git diff failed");
+                        }
+                        _ => {}
                     }
                     elapsed = Duration::ZERO;
                 }
 
                 // Periodic git diff.
                 if elapsed >= poll_interval {
-                    if let Ok(events) = git.detect_changes()
-                        && !events.is_empty()
-                    {
-                        let _ = tx.send(dedup_events(events));
+                    match git.detect_changes() {
+                        Ok(events) if !events.is_empty() => {
+                            tracing::debug!(event_count = events.len(), "periodic git diff found changes");
+                            let _ = tx.send(dedup_events(events));
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "periodic git diff failed");
+                        }
+                        _ => {}
                     }
                     elapsed = Duration::ZERO;
                 }
@@ -149,6 +181,8 @@ impl HybridDetector {
                 thread::sleep(poll_step);
                 elapsed += poll_step;
             }
+
+            tracing::debug!("hybrid detector background thread exiting");
         });
 
         self.bg_thread = Some(handle);
@@ -159,11 +193,13 @@ impl HybridDetector {
     ///
     /// Safe to call multiple times or before [`start`](Self::start).
     pub fn stop(&mut self) {
+        tracing::info!("stopping hybrid change detector");
         self.running.store(false, Ordering::SeqCst);
         self.watcher.stop();
         if let Some(handle) = self.bg_thread.take() {
             let _ = handle.join();
         }
+        tracing::debug!("hybrid change detector stopped");
     }
 
     /// Trigger an immediate git diff scan.
@@ -171,6 +207,7 @@ impl HybridDetector {
     /// The scan runs asynchronously on the background thread; results will
     /// appear on the channel returned by [`start`](Self::start).
     pub fn reindex(&self) {
+        tracing::info!("reindex requested");
         self.reindex_flag.store(true, Ordering::SeqCst);
     }
 }
