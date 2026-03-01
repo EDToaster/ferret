@@ -9,7 +9,9 @@ use tokio::time::timeout;
 use indexrs_core::SegmentManager;
 use indexrs_core::error::IndexError;
 
+use crate::args::SortOrder;
 use crate::color::ColorConfig;
+use crate::files::{self, FilesFilter};
 use crate::output::StreamingWriter;
 use crate::search_cmd::{self, SearchCmdOptions};
 
@@ -131,6 +133,47 @@ fn handle_search_request(
     (lines, start.elapsed())
 }
 
+/// Execute a Files request against the loaded index.
+fn handle_files_request(
+    manager: &SegmentManager,
+    language: Option<String>,
+    path_glob: Option<String>,
+    sort: String,
+    limit: Option<usize>,
+) -> (Vec<String>, Duration) {
+    let start = Instant::now();
+    let snapshot = manager.snapshot();
+    let color = ColorConfig::new(false);
+
+    let sort_order = match sort.as_str() {
+        "modified" => SortOrder::Modified,
+        "size" => SortOrder::Size,
+        _ => SortOrder::Path,
+    };
+
+    let filter = FilesFilter {
+        language,
+        path_glob,
+        sort: sort_order,
+        limit,
+    };
+
+    let mut buf = Vec::new();
+    {
+        let mut writer = StreamingWriter::new(&mut buf);
+        let _ = files::run_files(&snapshot, &filter, &color, &mut writer);
+    }
+
+    let output = String::from_utf8_lossy(&buf);
+    let lines: Vec<String> = output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect();
+
+    (lines, start.elapsed())
+}
+
 /// Handle a single client connection.
 ///
 /// Reads newline-delimited JSON requests from the client and writes
@@ -214,11 +257,29 @@ async fn handle_connection(stream: UnixStream, manager: &SegmentManager) -> Resu
                     .await
                     .map_err(IndexError::Io)?;
             }
-            DaemonRequest::Files { .. } => {
-                // TODO: full implementation — for now, return Done with zero results.
+            DaemonRequest::Files {
+                language,
+                path_glob,
+                sort,
+                limit,
+            } => {
+                let (lines, elapsed) =
+                    handle_files_request(manager, language, path_glob, sort, limit);
+
+                for line_content in &lines {
+                    let resp = serde_json::to_string(&DaemonResponse::Line {
+                        content: line_content.clone(),
+                    })
+                    .unwrap();
+                    writer
+                        .write_all(format!("{resp}\n").as_bytes())
+                        .await
+                        .map_err(IndexError::Io)?;
+                }
+
                 let resp = serde_json::to_string(&DaemonResponse::Done {
-                    total: 0,
-                    duration_ms: 0,
+                    total: lines.len(),
+                    duration_ms: elapsed.as_millis() as u64,
                 })
                 .unwrap();
                 writer
@@ -387,6 +448,87 @@ mod tests {
             .unwrap();
 
         // Wait for daemon to exit.
+        let _ = tokio::time::timeout(Duration::from_secs(2), daemon_handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_daemon_files_returns_results() {
+        use indexrs_core::segment::InputFile;
+
+        let dir = tempfile::tempdir().unwrap();
+        let indexrs_dir = dir.path().join(".indexrs");
+        std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+        manager
+            .index_files(vec![
+                InputFile {
+                    path: "src/main.rs".to_string(),
+                    content: b"fn main() {}\n".to_vec(),
+                    mtime: 100,
+                },
+                InputFile {
+                    path: "src/lib.rs".to_string(),
+                    content: b"pub fn hello() {}\n".to_vec(),
+                    mtime: 200,
+                },
+            ])
+            .unwrap();
+        drop(manager);
+
+        let repo_root = dir.path().to_path_buf();
+        let repo_root_clone = repo_root.clone();
+
+        let daemon_handle = tokio::spawn(async move {
+            start_daemon(&repo_root_clone).await.unwrap();
+        });
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let stream = try_connect(&repo_root).await.expect("should connect");
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        // Send a Files request.
+        let req = serde_json::to_string(&DaemonRequest::Files {
+            language: None,
+            path_glob: None,
+            sort: "path".to_string(),
+            limit: None,
+        })
+        .unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+
+        let mut lines = Vec::new();
+        loop {
+            let mut response_line = String::new();
+            reader.read_line(&mut response_line).await.unwrap();
+            let resp: DaemonResponse = serde_json::from_str(response_line.trim()).unwrap();
+            match resp {
+                DaemonResponse::Line { content } => {
+                    lines.push(content);
+                }
+                DaemonResponse::Done { total, .. } => {
+                    assert_eq!(total, lines.len());
+                    break;
+                }
+                other => panic!("unexpected response: {other:?}"),
+            }
+        }
+
+        assert_eq!(lines.len(), 2, "should list both indexed files");
+        assert!(lines.iter().any(|l| l.contains("main.rs")));
+        assert!(lines.iter().any(|l| l.contains("lib.rs")));
+
+        // Shutdown.
+        let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
         let _ = tokio::time::timeout(Duration::from_secs(2), daemon_handle).await;
     }
 
