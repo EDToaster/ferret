@@ -185,8 +185,13 @@ pub fn search_segments_with_options(
 
     for segment in snapshot.iter() {
         let tombstones = segment.load_tombstones()?;
-        let file_matches =
-            search_single_segment_with_context(segment, query, &tombstones, options.context_lines)?;
+        let file_matches = search_single_segment_with_context(
+            segment,
+            query,
+            &tombstones,
+            options.context_lines,
+            None,
+        )?;
 
         for fm in file_matches {
             let seg_id = segment.segment_id();
@@ -233,6 +238,7 @@ fn search_single_segment_with_context(
     query: &str,
     tombstones: &TombstoneSet,
     context_lines: usize,
+    max_file_results: Option<usize>,
 ) -> Result<Vec<FileMatch>, IndexError> {
     let candidates = find_candidates(segment.trigram_reader(), query)?;
 
@@ -286,6 +292,13 @@ fn search_single_segment_with_context(
             lines: line_matches,
             score,
         });
+
+        // Early termination: stop once we have enough file results
+        if let Some(max) = max_file_results
+            && file_matches.len() >= max
+        {
+            break;
+        }
     }
 
     Ok(file_matches)
@@ -744,7 +757,8 @@ mod tests {
         );
 
         let tombstones = TombstoneSet::new();
-        let results = search_single_segment_with_context(&seg, "println", &tombstones, 0).unwrap();
+        let results =
+            search_single_segment_with_context(&seg, "println", &tombstones, 0, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].path, PathBuf::from("main.rs"));
         assert_eq!(results[0].lines.len(), 1);
@@ -778,7 +792,8 @@ mod tests {
         let mut tombstones = TombstoneSet::new();
         tombstones.insert(FileId(0));
 
-        let results = search_single_segment_with_context(&seg, "println", &tombstones, 0).unwrap();
+        let results =
+            search_single_segment_with_context(&seg, "println", &tombstones, 0, None).unwrap();
         // Only lib.rs should appear (main.rs is tombstoned)
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].path, PathBuf::from("lib.rs"));
@@ -801,7 +816,8 @@ mod tests {
         );
 
         let tombstones = TombstoneSet::new();
-        let results = search_single_segment_with_context(&seg, "foobar", &tombstones, 0).unwrap();
+        let results =
+            search_single_segment_with_context(&seg, "foobar", &tombstones, 0, None).unwrap();
         assert!(results.is_empty());
     }
 
@@ -823,7 +839,7 @@ mod tests {
 
         let tombstones = TombstoneSet::new();
         // Queries < 3 chars produce no trigrams, so no candidates
-        let results = search_single_segment_with_context(&seg, "fn", &tombstones, 0).unwrap();
+        let results = search_single_segment_with_context(&seg, "fn", &tombstones, 0, None).unwrap();
         assert!(results.is_empty());
     }
 
@@ -1254,6 +1270,35 @@ mod tests {
             "alphabetical tiebreaker: alpha before beta"
         );
         assert_eq!(result.files[1].path, PathBuf::from("src/beta.rs"));
+    }
+
+    #[test]
+    fn test_search_single_segment_early_termination() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        // Build a segment with 5 files, all containing "println"
+        let files: Vec<InputFile> = (0..5)
+            .map(|i| InputFile {
+                path: format!("file_{i}.rs"),
+                content: format!("fn f{i}() {{ println!(\"hello\"); }}\n").into_bytes(),
+                mtime: 0,
+            })
+            .collect();
+
+        let seg = build_segment(&base_dir, SegmentId(0), files);
+        let tombstones = TombstoneSet::new();
+
+        // Without limit: should find all 5
+        let all =
+            search_single_segment_with_context(&seg, "println", &tombstones, 0, None).unwrap();
+        assert_eq!(all.len(), 5);
+
+        // With limit=2: should find exactly 2
+        let limited =
+            search_single_segment_with_context(&seg, "println", &tombstones, 0, Some(2)).unwrap();
+        assert_eq!(limited.len(), 2);
     }
 
     #[test]
