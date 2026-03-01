@@ -1,5 +1,6 @@
 pub mod binary;
 pub mod changes;
+pub mod checkpoint;
 pub mod codec;
 pub mod content;
 pub mod error;
@@ -32,6 +33,7 @@ pub use binary::{
     should_index_file,
 };
 pub use changes::{ChangeEvent, ChangeKind};
+pub use checkpoint::{Checkpoint, read_checkpoint, write_checkpoint};
 pub use codec::{
     decode_delta_varint, decode_positional_postings, encode_delta_varint,
     encode_positional_postings,
