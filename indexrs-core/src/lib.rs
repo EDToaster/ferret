@@ -5,6 +5,7 @@ pub mod codec;
 pub mod content;
 pub mod error;
 pub mod git_diff;
+pub mod hash_diff;
 pub mod hybrid_detector;
 pub mod index_reader;
 pub mod index_state;
@@ -41,6 +42,7 @@ pub use codec::{
 pub use content::{ContentStoreReader, ContentStoreWriter};
 pub use error::{IndexError, Result};
 pub use git_diff::GitChangeDetector;
+pub use hash_diff::hash_diff;
 pub use hybrid_detector::HybridDetector;
 pub use index_reader::TrigramIndexReader;
 pub use index_state::{IndexState, SegmentList};
