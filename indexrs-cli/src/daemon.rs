@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -58,7 +59,7 @@ pub enum DaemonResponse {
     /// A single output line (file path or search match).
     Line { content: String },
     /// End of results with summary.
-    Done { total: usize, duration_ms: u64 },
+    Done { total: usize, duration_ms: u64, stale: bool },
     /// Error message.
     Error { message: String },
     /// Ping response.
@@ -95,13 +96,15 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
 
     let indexrs_dir = repo_root.join(".indexrs");
     let manager = std::sync::Arc::new(SegmentManager::new(&indexrs_dir)?);
+    let caught_up = std::sync::Arc::new(AtomicBool::new(true));
 
     loop {
         match timeout(IDLE_TIMEOUT, listener.accept()).await {
             Ok(Ok((stream, _))) => {
                 let mgr = manager.clone();
+                let cu = caught_up.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, &mgr).await {
+                    if let Err(e) = handle_connection(stream, &mgr, &cu).await {
                         eprintln!("daemon: connection error: {e}");
                     }
                 });
@@ -195,7 +198,11 @@ fn handle_files_request(
 ///
 /// Reads newline-delimited JSON requests from the client and writes
 /// newline-delimited JSON responses back.
-async fn handle_connection(stream: UnixStream, manager: &SegmentManager) -> Result<(), IndexError> {
+async fn handle_connection(
+    stream: UnixStream,
+    manager: &SegmentManager,
+    caught_up: &AtomicBool,
+) -> Result<(), IndexError> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
@@ -269,6 +276,7 @@ async fn handle_connection(stream: UnixStream, manager: &SegmentManager) -> Resu
                         let resp = serde_json::to_string(&DaemonResponse::Done {
                             total: lines.len(),
                             duration_ms: elapsed.as_millis() as u64,
+                            stale: !caught_up.load(Ordering::Relaxed),
                         })
                         .unwrap();
                         writer
@@ -308,6 +316,7 @@ async fn handle_connection(stream: UnixStream, manager: &SegmentManager) -> Resu
                     let resp = serde_json::to_string(&DaemonResponse::Done {
                         total: lines.len(),
                         duration_ms: elapsed.as_millis() as u64,
+                        stale: !caught_up.load(Ordering::Relaxed),
                     })
                     .unwrap();
                     writer
@@ -403,8 +412,11 @@ pub async fn run_via_daemon<W: std::io::Write>(
                     break; // SIGPIPE — exit silently
                 }
             }
-            DaemonResponse::Done { total, .. } => {
+            DaemonResponse::Done { total, stale, .. } => {
                 let _ = writer.finish();
+                if stale {
+                    eprintln!("warning: index is updating, results may be incomplete");
+                }
                 return Ok(if total == 0 {
                     ExitCode::NoResults
                 } else {
@@ -537,14 +549,35 @@ mod tests {
         let resp = DaemonResponse::Done {
             total: 42,
             duration_ms: 123,
+            stale: false,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let parsed: DaemonResponse = serde_json::from_str(&json).unwrap();
         match parsed {
-            DaemonResponse::Done { total, duration_ms } => {
+            DaemonResponse::Done {
+                total,
+                duration_ms,
+                stale,
+            } => {
                 assert_eq!(total, 42);
                 assert_eq!(duration_ms, 123);
+                assert!(!stale);
             }
+            _ => panic!("expected Done variant"),
+        }
+    }
+
+    #[test]
+    fn test_response_roundtrip_done_stale() {
+        let resp = DaemonResponse::Done {
+            total: 10,
+            duration_ms: 50,
+            stale: true,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: DaemonResponse = serde_json::from_str(&json).unwrap();
+        match parsed {
+            DaemonResponse::Done { stale, .. } => assert!(stale),
             _ => panic!("expected Done variant"),
         }
     }
