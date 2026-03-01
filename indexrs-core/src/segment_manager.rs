@@ -243,6 +243,58 @@ impl SegmentManager {
         self.index_files_with_budget(files, DEFAULT_COMPACTION_BUDGET)
     }
 
+    /// Index files with a progress callback.
+    ///
+    /// Behaves identically to [`index_files`](Self::index_files) but calls
+    /// `on_progress(files_done, files_total)` after each file is processed
+    /// during segment building.
+    pub fn index_files_with_progress<F: FnMut(usize, usize)>(
+        &self,
+        files: Vec<InputFile>,
+        mut on_progress: F,
+    ) -> Result<(), IndexError> {
+        let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
+
+        let total = files.len();
+        let mut done = 0usize;
+        let mut batch: Vec<InputFile> = Vec::new();
+        let mut batch_bytes: usize = 0;
+        let mut segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
+
+        for file in files {
+            let content_len = file.content.len();
+            batch.push(file);
+            batch_bytes += content_len;
+
+            if DEFAULT_COMPACTION_BUDGET > 0 && batch_bytes > DEFAULT_COMPACTION_BUDGET {
+                let seg_id = self.next_segment_id()?;
+                let writer = SegmentWriter::new(&self.segments_dir, seg_id);
+                segments.push(Arc::new(
+                    writer.build_with_progress(std::mem::take(&mut batch), || {
+                        done += 1;
+                        on_progress(done, total);
+                    })?,
+                ));
+                batch_bytes = 0;
+            }
+        }
+
+        // Flush remaining files
+        if !batch.is_empty() {
+            let seg_id = self.next_segment_id()?;
+            let writer = SegmentWriter::new(&self.segments_dir, seg_id);
+            segments.push(Arc::new(
+                writer.build_with_progress(batch, || {
+                    done += 1;
+                    on_progress(done, total);
+                })?,
+            ));
+        }
+
+        self.state.publish(segments);
+        Ok(())
+    }
+
     /// Apply a batch of file change events to the index.
     ///
     /// For each change:
@@ -1415,6 +1467,49 @@ mod tests {
         let snap = manager.snapshot();
         assert_eq!(snap.len(), 1);
         assert_eq!(snap[0].entry_count(), 5);
+    }
+
+    #[test]
+    fn test_index_files_with_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let indexrs_dir = dir.path().join(".indexrs");
+        std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        let manager = SegmentManager::new(&indexrs_dir).unwrap();
+        let files = vec![
+            InputFile {
+                path: "a.rs".to_string(),
+                content: b"fn a() {}".to_vec(),
+                mtime: 1,
+            },
+            InputFile {
+                path: "b.rs".to_string(),
+                content: b"fn b() {}".to_vec(),
+                mtime: 2,
+            },
+            InputFile {
+                path: "c.rs".to_string(),
+                content: b"fn c() {}".to_vec(),
+                mtime: 3,
+            },
+        ];
+
+        let progress = std::sync::Mutex::new(Vec::new());
+        manager
+            .index_files_with_progress(files, |done, total| {
+                progress.lock().unwrap().push((done, total));
+            })
+            .unwrap();
+
+        let progress = progress.into_inner().unwrap();
+        assert_eq!(
+            progress,
+            vec![(1, 3), (2, 3), (3, 3)],
+            "should report (done, total) for each file"
+        );
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 1);
     }
 
     #[test]
