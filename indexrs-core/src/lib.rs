@@ -1,9 +1,12 @@
 pub mod binary;
+pub mod catchup;
 pub mod changes;
+pub mod checkpoint;
 pub mod codec;
 pub mod content;
 pub mod error;
 pub mod git_diff;
+pub mod hash_diff;
 pub mod hybrid_detector;
 pub mod index_reader;
 pub mod index_state;
@@ -31,7 +34,9 @@ pub use binary::{
     DEFAULT_MAX_FILE_SIZE, is_binary_content, is_binary_extension, is_binary_path,
     should_index_file,
 };
+pub use catchup::run_catchup;
 pub use changes::{ChangeEvent, ChangeKind};
+pub use checkpoint::{Checkpoint, read_checkpoint, write_checkpoint};
 pub use codec::{
     decode_delta_varint, decode_positional_postings, encode_delta_varint,
     encode_positional_postings,
@@ -39,6 +44,7 @@ pub use codec::{
 pub use content::{ContentStoreReader, ContentStoreWriter};
 pub use error::{IndexError, Result};
 pub use git_diff::GitChangeDetector;
+pub use hash_diff::hash_diff;
 pub use hybrid_detector::HybridDetector;
 pub use index_reader::TrigramIndexReader;
 pub use index_state::{IndexState, SegmentList};

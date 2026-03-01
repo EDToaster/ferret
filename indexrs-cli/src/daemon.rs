@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -7,8 +8,11 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::time::timeout;
 
 use indexrs_core::SegmentManager;
+use indexrs_core::checkpoint::{Checkpoint, write_checkpoint};
 use indexrs_core::error::IndexError;
+use indexrs_core::git_diff::GitChangeDetector;
 use indexrs_core::search::MatchPattern;
+use indexrs_core::HybridDetector;
 
 use crate::args::SortOrder;
 use crate::color::ColorConfig;
@@ -49,6 +53,7 @@ pub enum DaemonRequest {
     },
     Ping,
     Shutdown,
+    Reindex,
 }
 
 /// Response from daemon to CLI client, one JSON line per message.
@@ -58,7 +63,11 @@ pub enum DaemonResponse {
     /// A single output line (file path or search match).
     Line { content: String },
     /// End of results with summary.
-    Done { total: usize, duration_ms: u64 },
+    Done {
+        total: usize,
+        duration_ms: u64,
+        stale: bool,
+    },
     /// Error message.
     Error { message: String },
     /// Ping response.
@@ -74,6 +83,64 @@ pub fn socket_path(repo_root: &Path) -> PathBuf {
 pub async fn try_connect(repo_root: &Path) -> Option<UnixStream> {
     let path = socket_path(repo_root);
     UnixStream::connect(&path).await.ok()
+}
+
+/// Run the HybridDetector event loop, applying changes to the index.
+///
+/// Blocks the calling thread until the detector's channel disconnects
+/// (which happens when the detector is dropped). Periodically checks
+/// `reindex_flag` and triggers a manual reindex when it is set.
+fn run_live_indexing(
+    repo_root: &Path,
+    indexrs_dir: &Path,
+    manager: &std::sync::Arc<SegmentManager>,
+    reindex_flag: &AtomicBool,
+) -> Result<(), IndexError> {
+    let mut detector = HybridDetector::new(repo_root.to_path_buf())?;
+    let rx = detector.start()?;
+
+    loop {
+        // Check for external reindex requests between batches.
+        if reindex_flag.swap(false, Ordering::SeqCst) {
+            tracing::info!("external reindex request received");
+            detector.reindex();
+        }
+
+        match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(batch) => {
+                if batch.is_empty() {
+                    continue;
+                }
+                tracing::debug!(event_count = batch.len(), "applying live change batch");
+
+                if let Err(e) = manager.apply_changes(repo_root, &batch) {
+                    tracing::warn!(error = %e, "failed to apply live changes");
+                    continue;
+                }
+
+                // Update checkpoint.
+                let git = GitChangeDetector::new(repo_root.to_path_buf());
+                let git_commit = git.get_head_sha().ok();
+                let snapshot = manager.snapshot();
+                let file_count: u64 = snapshot.iter().map(|s| s.entry_count() as u64).sum();
+                let cp = Checkpoint::new(git_commit, file_count);
+                if let Err(e) = write_checkpoint(indexrs_dir, &cp) {
+                    tracing::warn!(error = %e, "failed to update checkpoint");
+                }
+
+                // Check if compaction needed.
+                if manager.should_compact() {
+                    tracing::info!("compaction triggered by live changes");
+                    drop(manager.compact_background());
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    detector.stop();
+    Ok(())
 }
 
 /// Start a daemon process listening on a Unix domain socket.
@@ -95,13 +162,69 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
 
     let indexrs_dir = repo_root.join(".indexrs");
     let manager = std::sync::Arc::new(SegmentManager::new(&indexrs_dir)?);
+    let caught_up = std::sync::Arc::new(AtomicBool::new(false));
+    let reindex_flag = std::sync::Arc::new(AtomicBool::new(false));
+
+    // Spawn background catch-up + live indexing task.
+    {
+        let mgr = manager.clone();
+        let cu = caught_up.clone();
+        let rf = reindex_flag.clone();
+        let repo = repo_root.to_path_buf();
+        let idir = indexrs_dir.clone();
+        tokio::spawn(async move {
+            // Phase 1: catch-up.
+            match tokio::task::spawn_blocking({
+                let repo = repo.clone();
+                let idir = idir.clone();
+                let mgr = mgr.clone();
+                move || indexrs_core::run_catchup(&repo, &idir, &mgr)
+            })
+            .await
+            {
+                Ok(Ok(changes)) => {
+                    if !changes.is_empty() {
+                        tracing::info!(
+                            change_count = changes.len(),
+                            "daemon catch-up applied changes"
+                        );
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "daemon catch-up failed");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "daemon catch-up task panicked");
+                }
+            }
+            cu.store(true, Ordering::SeqCst);
+            tracing::info!("daemon catch-up complete, starting live watcher");
+
+            // Phase 2: start HybridDetector for live changes.
+            // Use std::thread::spawn (not spawn_blocking) so the blocking
+            // event loop does not prevent the tokio runtime from shutting
+            // down during tests or graceful termination.
+            std::thread::spawn({
+                let repo = repo.clone();
+                let idir = idir.clone();
+                let mgr = mgr.clone();
+                let rf = rf.clone();
+                move || match run_live_indexing(&repo, &idir, &mgr, &rf) {
+                    Ok(()) => tracing::debug!("live indexing stopped"),
+                    Err(e) => tracing::warn!(error = %e, "live indexing failed"),
+                }
+            });
+        });
+    }
 
     loop {
         match timeout(IDLE_TIMEOUT, listener.accept()).await {
             Ok(Ok((stream, _))) => {
                 let mgr = manager.clone();
+                let cu = caught_up.clone();
+                let rf = reindex_flag.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, &mgr).await {
+                    if let Err(e) = handle_connection(stream, &mgr, &cu, &rf).await {
                         eprintln!("daemon: connection error: {e}");
                     }
                 });
@@ -195,7 +318,12 @@ fn handle_files_request(
 ///
 /// Reads newline-delimited JSON requests from the client and writes
 /// newline-delimited JSON responses back.
-async fn handle_connection(stream: UnixStream, manager: &SegmentManager) -> Result<(), IndexError> {
+async fn handle_connection(
+    stream: UnixStream,
+    manager: &SegmentManager,
+    caught_up: &AtomicBool,
+    reindex_flag: &AtomicBool,
+) -> Result<(), IndexError> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
@@ -269,6 +397,7 @@ async fn handle_connection(stream: UnixStream, manager: &SegmentManager) -> Resu
                         let resp = serde_json::to_string(&DaemonResponse::Done {
                             total: lines.len(),
                             duration_ms: elapsed.as_millis() as u64,
+                            stale: !caught_up.load(Ordering::Relaxed),
                         })
                         .unwrap();
                         writer
@@ -308,6 +437,7 @@ async fn handle_connection(stream: UnixStream, manager: &SegmentManager) -> Resu
                     let resp = serde_json::to_string(&DaemonResponse::Done {
                         total: lines.len(),
                         duration_ms: elapsed.as_millis() as u64,
+                        stale: !caught_up.load(Ordering::Relaxed),
                     })
                     .unwrap();
                     writer
@@ -324,6 +454,14 @@ async fn handle_connection(stream: UnixStream, manager: &SegmentManager) -> Resu
                         .map_err(IndexError::Io)?;
                 }
             },
+            DaemonRequest::Reindex => {
+                reindex_flag.store(true, Ordering::SeqCst);
+                let resp = serde_json::to_string(&DaemonResponse::Pong).unwrap();
+                writer
+                    .write_all(format!("{resp}\n").as_bytes())
+                    .await
+                    .map_err(IndexError::Io)?;
+            }
         }
 
         line.clear();
@@ -403,8 +541,11 @@ pub async fn run_via_daemon<W: std::io::Write>(
                     break; // SIGPIPE — exit silently
                 }
             }
-            DaemonResponse::Done { total, .. } => {
+            DaemonResponse::Done { total, stale, .. } => {
                 let _ = writer.finish();
+                if stale {
+                    eprintln!("warning: index is updating, results may be incomplete");
+                }
                 return Ok(if total == 0 {
                     ExitCode::NoResults
                 } else {
@@ -525,6 +666,14 @@ mod tests {
     }
 
     #[test]
+    fn test_request_roundtrip_reindex() {
+        let req = DaemonRequest::Reindex;
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: DaemonRequest = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, DaemonRequest::Reindex));
+    }
+
+    #[test]
     fn test_request_roundtrip_shutdown() {
         let req = DaemonRequest::Shutdown;
         let json = serde_json::to_string(&req).unwrap();
@@ -537,14 +686,35 @@ mod tests {
         let resp = DaemonResponse::Done {
             total: 42,
             duration_ms: 123,
+            stale: false,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let parsed: DaemonResponse = serde_json::from_str(&json).unwrap();
         match parsed {
-            DaemonResponse::Done { total, duration_ms } => {
+            DaemonResponse::Done {
+                total,
+                duration_ms,
+                stale,
+            } => {
                 assert_eq!(total, 42);
                 assert_eq!(duration_ms, 123);
+                assert!(!stale);
             }
+            _ => panic!("expected Done variant"),
+        }
+    }
+
+    #[test]
+    fn test_response_roundtrip_done_stale() {
+        let resp = DaemonResponse::Done {
+            total: 10,
+            duration_ms: 50,
+            stale: true,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: DaemonResponse = serde_json::from_str(&json).unwrap();
+        match parsed {
+            DaemonResponse::Done { stale, .. } => assert!(stale),
             _ => panic!("expected Done variant"),
         }
     }
@@ -630,6 +800,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let indexrs_dir = dir.path().join(".indexrs");
         std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        // Write source files to disk so background catch-up doesn't tombstone them.
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), b"fn main() {}\n").unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), b"pub fn hello() {}\n").unwrap();
 
         let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
         manager
@@ -778,6 +953,14 @@ mod tests {
         let indexrs_dir = dir.path().join(".indexrs");
         std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
 
+        // Write source files to disk so background catch-up doesn't tombstone them.
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/main.rs"),
+            b"fn main() {\n    println!(\"hello world\");\n}\n",
+        )
+        .unwrap();
+
         // Build an index with searchable content.
         let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
         manager
@@ -861,6 +1044,14 @@ mod tests {
         let indexrs_dir = dir.path().join(".indexrs");
         std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
 
+        // Write source files to disk so background catch-up doesn't tombstone them.
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/main.rs"),
+            b"fn main() {\n    println!(\"hello world\");\n}\n",
+        )
+        .unwrap();
+
         let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
         manager
             .index_files(vec![InputFile {
@@ -926,6 +1117,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let indexrs_dir = dir.path().join(".indexrs");
         std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        // Write source files to disk so background catch-up doesn't tombstone them.
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/main.rs"),
+            b"fn main() {\n    println!(\"hello world\");\n}\n",
+        )
+        .unwrap();
 
         let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
         manager
