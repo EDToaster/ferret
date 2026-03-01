@@ -7,12 +7,12 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::time::timeout;
 
+use indexrs_core::HybridDetector;
 use indexrs_core::SegmentManager;
 use indexrs_core::checkpoint::{Checkpoint, write_checkpoint};
 use indexrs_core::error::IndexError;
 use indexrs_core::git_diff::GitChangeDetector;
 use indexrs_core::search::MatchPattern;
-use indexrs_core::HybridDetector;
 
 use crate::args::SortOrder;
 use crate::color::ColorConfig;
