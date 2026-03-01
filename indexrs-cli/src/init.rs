@@ -151,66 +151,81 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
     ));
 
     // ── Phase 2: Filter and load file contents ───────────────────────
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
     let filter_start = Instant::now();
     let total_walked = walked.len();
-    let mut files = Vec::new();
-    let mut skipped_size = 0usize;
-    let mut skipped_binary = 0usize;
-    let mut skipped_content = 0usize;
-    let mut skipped_read_err = 0usize;
-    let mut total_content_bytes: u64 = 0;
+    let skipped_size = AtomicUsize::new(0);
+    let skipped_binary = AtomicUsize::new(0);
+    let skipped_content = AtomicUsize::new(0);
+    let skipped_read_err = AtomicUsize::new(0);
+    let total_content_bytes = AtomicU64::new(0);
+    let filter_done = AtomicUsize::new(0);
 
-    for (i, wf) in walked.iter().enumerate() {
-        if (i + 1) % step == 0 || i + 1 == total_walked {
-            let pct = ((i + 1) as f64 / total_walked as f64 * 100.0) as u32;
-            progress.update(&format!(
-                "Filtering files... {}/{} ({pct}%)",
-                fmt_count(i + 1),
-                fmt_count(total_walked)
-            ));
-        }
-
-        // Pre-filter by size and extension before reading content.
-        if wf.metadata.len() > DEFAULT_MAX_FILE_SIZE {
-            skipped_size += 1;
-            continue;
-        }
-        if indexrs_core::is_binary_path(&wf.path) {
-            skipped_binary += 1;
-            continue;
-        }
-        let content = match std::fs::read(&wf.path) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(path = %wf.path.display(), error = %e, "skipping file: read error");
-                skipped_read_err += 1;
-                continue;
+    let progress = std::sync::Mutex::new(progress);
+    let files: Vec<InputFile> = walked
+        .par_iter()
+        .filter_map(|wf| {
+            let current = filter_done.fetch_add(1, Ordering::Relaxed) + 1;
+            if current.is_multiple_of(step) || current == total_walked {
+                let pct = (current as f64 / total_walked as f64 * 100.0) as u32;
+                progress.lock().unwrap().update(&format!(
+                    "Filtering files... {}/{} ({pct}%)",
+                    fmt_count(current),
+                    fmt_count(total_walked),
+                ));
             }
-        };
-        if !should_index_file(&wf.path, &content, DEFAULT_MAX_FILE_SIZE) {
-            skipped_content += 1;
-            continue;
-        }
-        let rel_path = wf
-            .path
-            .strip_prefix(repo_root)
-            .unwrap_or(&wf.path)
-            .to_string_lossy()
-            .to_string();
-        let mtime = wf
-            .metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        total_content_bytes += content.len() as u64;
-        files.push(InputFile {
-            path: rel_path,
-            content,
-            mtime,
-        });
-    }
+
+            // Pre-filter by size and extension before reading content.
+            if wf.metadata.len() > DEFAULT_MAX_FILE_SIZE {
+                skipped_size.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            if indexrs_core::is_binary_path(&wf.path) {
+                skipped_binary.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            let content = match std::fs::read(&wf.path) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(path = %wf.path.display(), error = %e, "skipping file: read error");
+                    skipped_read_err.fetch_add(1, Ordering::Relaxed);
+                    return None;
+                }
+            };
+            if !should_index_file(&wf.path, &content, DEFAULT_MAX_FILE_SIZE) {
+                skipped_content.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            let rel_path = wf
+                .path
+                .strip_prefix(repo_root)
+                .unwrap_or(&wf.path)
+                .to_string_lossy()
+                .to_string();
+            let mtime = wf
+                .metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            total_content_bytes.fetch_add(content.len() as u64, Ordering::Relaxed);
+            Some(InputFile {
+                path: rel_path,
+                content,
+                mtime,
+            })
+        })
+        .collect();
+    let mut progress = progress.into_inner().unwrap();
+
+    let skipped_size = skipped_size.load(Ordering::Relaxed);
+    let skipped_binary = skipped_binary.load(Ordering::Relaxed);
+    let skipped_content = skipped_content.load(Ordering::Relaxed);
+    let skipped_read_err = skipped_read_err.load(Ordering::Relaxed);
+    let total_content_bytes = total_content_bytes.load(Ordering::Relaxed);
 
     let filter_elapsed = filter_start.elapsed();
     let total_skipped = skipped_size + skipped_binary + skipped_content + skipped_read_err;
