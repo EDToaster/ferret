@@ -172,6 +172,11 @@ pub fn search_segments(snapshot: &SegmentList, query: &str) -> Result<SearchResu
 ///
 /// Like [`search_segments()`] but accepts [`SearchOptions`] to configure
 /// context lines and other search parameters.
+///
+/// Segments are searched in parallel using rayon. Results are collected
+/// per-segment, then merged in a single-threaded pass (newest segment wins
+/// per path). A shared `AtomicUsize` budget provides approximate early
+/// termination when `max_results` is set.
 pub fn search_segments_with_options(
     snapshot: &SegmentList,
     query: &str,
@@ -188,50 +193,69 @@ pub fn search_segments_with_options(
         });
     }
 
-    // Collect results from all segments, tagged with segment ID for dedup
-    // Key: file path -> (segment_id, FileMatch)
-    let mut merged: HashMap<PathBuf, (SegmentId, FileMatch)> = HashMap::new();
+    // Shared budget for approximate early termination across segments
+    let budget = AtomicUsize::new(options.max_results.unwrap_or(usize::MAX));
 
-    for segment in snapshot.iter() {
-        // Compute remaining budget for this segment
-        let segment_budget = options
-            .max_results
-            .map(|max| max.saturating_sub(merged.len()));
+    // Search all segments in parallel, collecting tagged results
+    let per_segment_results: Vec<Result<Vec<(SegmentId, FileMatch)>, IndexError>> = snapshot
+        .par_iter()
+        .map(|segment| {
+            // Check budget before doing expensive work
+            if budget.load(Ordering::Relaxed) == 0 {
+                return Ok(Vec::new());
+            }
 
-        // Skip this segment entirely if budget is exhausted
-        if segment_budget == Some(0) {
-            break;
-        }
+            let tombstones = segment.load_tombstones()?;
+            let remaining = budget.load(Ordering::Relaxed);
+            let segment_budget = if options.max_results.is_some() {
+                Some(remaining)
+            } else {
+                None
+            };
 
-        let tombstones = segment.load_tombstones()?;
-        let file_matches = search_single_segment_with_context(
-            segment,
-            query,
-            &tombstones,
-            options.context_lines,
-            segment_budget,
-        )?;
+            let file_matches = search_single_segment_with_context(
+                segment,
+                query,
+                &tombstones,
+                options.context_lines,
+                segment_budget,
+            )?;
 
-        for fm in file_matches {
             let seg_id = segment.segment_id();
+            let tagged: Vec<(SegmentId, FileMatch)> = file_matches
+                .into_iter()
+                .filter_map(|fm| {
+                    // Decrement global budget
+                    if options.max_results.is_some() {
+                        let prev = budget.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |b| {
+                            if b > 0 { Some(b - 1) } else { None }
+                        });
+                        if prev.is_err() {
+                            return None;
+                        }
+                    }
+                    Some((seg_id, fm))
+                })
+                .collect();
+
+            Ok(tagged)
+        })
+        .collect();
+
+    // Merge results: dedup by path, newest segment wins
+    let mut merged: HashMap<PathBuf, (SegmentId, FileMatch)> = HashMap::new();
+    for result in per_segment_results {
+        for (seg_id, fm) in result? {
             match merged.get(&fm.path) {
-                Some((existing_seg_id, _)) if *existing_seg_id >= seg_id => {
-                    // Existing result is from a newer or same segment, keep it
-                }
+                Some((existing_seg_id, _)) if *existing_seg_id >= seg_id => {}
                 _ => {
-                    // This segment is newer, or path not seen yet
                     merged.insert(fm.path.clone(), (seg_id, fm));
                 }
-            }
-            if let Some(max) = options.max_results
-                && merged.len() >= max
-            {
-                break;
             }
         }
     }
 
-    // Extract FileMatch values and sort by score descending
+    // Sort by score descending, then path for stability
     let mut files: Vec<FileMatch> = merged.into_values().map(|(_, fm)| fm).collect();
     files.sort_by(|a, b| {
         b.score
@@ -239,6 +263,11 @@ pub fn search_segments_with_options(
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.path.cmp(&b.path))
     });
+
+    // Trim to max_results (parallel search may slightly overshoot)
+    if let Some(max) = options.max_results {
+        files.truncate(max);
+    }
 
     let total_file_count = files.len();
     let total_match_count: usize = files.iter().map(|f| f.lines.len()).sum();
@@ -695,6 +724,11 @@ pub fn search_segments_with_pattern(
 ///
 /// Combines pattern-aware matching (regex, case-insensitive) with
 /// search options (context lines, max results).
+///
+/// Segments are searched in parallel using rayon. Results are collected
+/// per-segment, then merged in a single-threaded pass (newest segment wins
+/// per path). A shared `AtomicUsize` budget provides approximate early
+/// termination when `max_results` is set.
 pub fn search_segments_with_pattern_and_options(
     snapshot: &SegmentList,
     pattern: &MatchPattern,
@@ -711,40 +745,62 @@ pub fn search_segments_with_pattern_and_options(
         });
     }
 
-    let mut merged: HashMap<PathBuf, (SegmentId, FileMatch)> = HashMap::new();
+    // Shared budget for approximate early termination across segments
+    let budget = AtomicUsize::new(options.max_results.unwrap_or(usize::MAX));
 
-    for segment in snapshot.iter() {
-        // Compute remaining budget for this segment
-        let segment_budget = options
-            .max_results
-            .map(|max| max.saturating_sub(merged.len()));
+    // Search all segments in parallel
+    let per_segment_results: Vec<Result<Vec<(SegmentId, FileMatch)>, IndexError>> = snapshot
+        .par_iter()
+        .map(|segment| {
+            if budget.load(Ordering::Relaxed) == 0 {
+                return Ok(Vec::new());
+            }
 
-        // Skip this segment entirely if budget is exhausted
-        if segment_budget == Some(0) {
-            break;
-        }
+            let tombstones = segment.load_tombstones()?;
+            let remaining = budget.load(Ordering::Relaxed);
+            let segment_budget = if options.max_results.is_some() {
+                Some(remaining)
+            } else {
+                None
+            };
 
-        let tombstones = segment.load_tombstones()?;
-        let file_matches = search_single_segment_with_pattern(
-            segment,
-            pattern,
-            &tombstones,
-            options.context_lines,
-            segment_budget,
-        )?;
+            let file_matches = search_single_segment_with_pattern(
+                segment,
+                pattern,
+                &tombstones,
+                options.context_lines,
+                segment_budget,
+            )?;
 
-        for fm in file_matches {
             let seg_id = segment.segment_id();
+            let tagged: Vec<(SegmentId, FileMatch)> = file_matches
+                .into_iter()
+                .filter_map(|fm| {
+                    if options.max_results.is_some() {
+                        let prev = budget.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |b| {
+                            if b > 0 { Some(b - 1) } else { None }
+                        });
+                        if prev.is_err() {
+                            return None;
+                        }
+                    }
+                    Some((seg_id, fm))
+                })
+                .collect();
+
+            Ok(tagged)
+        })
+        .collect();
+
+    // Merge: dedup by path, newest segment wins
+    let mut merged: HashMap<PathBuf, (SegmentId, FileMatch)> = HashMap::new();
+    for result in per_segment_results {
+        for (seg_id, fm) in result? {
             match merged.get(&fm.path) {
                 Some((existing_seg_id, _)) if *existing_seg_id >= seg_id => {}
                 _ => {
                     merged.insert(fm.path.clone(), (seg_id, fm));
                 }
-            }
-            if let Some(max) = options.max_results
-                && merged.len() >= max
-            {
-                break;
             }
         }
     }
@@ -756,6 +812,11 @@ pub fn search_segments_with_pattern_and_options(
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.path.cmp(&b.path))
     });
+
+    // Trim to max_results (parallel search may slightly overshoot)
+    if let Some(max) = options.max_results {
+        files.truncate(max);
+    }
 
     let total_file_count = files.len();
     let total_match_count: usize = files.iter().map(|f| f.lines.len()).sum();
