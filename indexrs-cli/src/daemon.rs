@@ -371,6 +371,9 @@ async fn handle_connection(
                 path_glob,
                 color,
             } => {
+                // Capture staleness before the search so the flag reflects the
+                // snapshot state, not whether catch-up finished mid-search.
+                let stale = !caught_up.load(Ordering::Relaxed);
                 let pattern = search_cmd::resolve_match_pattern(
                     &query,
                     regex,
@@ -401,7 +404,7 @@ async fn handle_connection(
                         let resp = serde_json::to_string(&DaemonResponse::Done {
                             total: lines.len(),
                             duration_ms: elapsed.as_millis() as u64,
-                            stale: !caught_up.load(Ordering::Relaxed),
+                            stale,
                         })
                         .unwrap();
                         writer
@@ -425,11 +428,25 @@ async fn handle_connection(
                 sort,
                 limit,
                 color,
-            } => match handle_files_request(manager, language, path_glob, sort, limit, color) {
-                Ok((lines, elapsed)) => {
-                    for line_content in &lines {
-                        let resp = serde_json::to_string(&DaemonResponse::Line {
-                            content: line_content.clone(),
+            } => {
+                let stale = !caught_up.load(Ordering::Relaxed);
+                match handle_files_request(manager, language, path_glob, sort, limit, color) {
+                    Ok((lines, elapsed)) => {
+                        for line_content in &lines {
+                            let resp = serde_json::to_string(&DaemonResponse::Line {
+                                content: line_content.clone(),
+                            })
+                            .unwrap();
+                            writer
+                                .write_all(format!("{resp}\n").as_bytes())
+                                .await
+                                .map_err(IndexError::Io)?;
+                        }
+
+                        let resp = serde_json::to_string(&DaemonResponse::Done {
+                            total: lines.len(),
+                            duration_ms: elapsed.as_millis() as u64,
+                            stale,
                         })
                         .unwrap();
                         writer
@@ -437,27 +454,16 @@ async fn handle_connection(
                             .await
                             .map_err(IndexError::Io)?;
                     }
-
-                    let resp = serde_json::to_string(&DaemonResponse::Done {
-                        total: lines.len(),
-                        duration_ms: elapsed.as_millis() as u64,
-                        stale: !caught_up.load(Ordering::Relaxed),
-                    })
-                    .unwrap();
-                    writer
-                        .write_all(format!("{resp}\n").as_bytes())
-                        .await
-                        .map_err(IndexError::Io)?;
+                    Err(msg) => {
+                        let resp =
+                            serde_json::to_string(&DaemonResponse::Error { message: msg }).unwrap();
+                        writer
+                            .write_all(format!("{resp}\n").as_bytes())
+                            .await
+                            .map_err(IndexError::Io)?;
+                    }
                 }
-                Err(msg) => {
-                    let resp =
-                        serde_json::to_string(&DaemonResponse::Error { message: msg }).unwrap();
-                    writer
-                        .write_all(format!("{resp}\n").as_bytes())
-                        .await
-                        .map_err(IndexError::Io)?;
-                }
-            },
+            }
             DaemonRequest::Reindex => {
                 let start = Instant::now();
                 let repo = repo_root.to_path_buf();
