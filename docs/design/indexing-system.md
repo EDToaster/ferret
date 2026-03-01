@@ -46,13 +46,13 @@ The index consists of four primary structures:
 |                   INDEX                           |
 |                                                   |
 |  +------------------+  +----------------------+   |
-|  | File Metadata    |  | Trigram Index         |   |
-|  | Index            |  | (trigram -> postings) |   |
+|  | File Metadata    |  | Trigram Index        |   |
+|  | Index            |  | (trigram -> postings)|   |
 |  +------------------+  +----------------------+   |
 |                                                   |
 |  +------------------+  +----------------------+   |
-|  | Content Store    |  | Symbol Index          |   |
-|  | (compressed)     |  | (name -> locations)   |   |
+|  | Content Store    |  | Symbol Index         |   |
+|  | (compressed)     |  | (name -> locations)  |   |
 |  +------------------+  +----------------------+   |
 +--------------------------------------------------+
 ```
