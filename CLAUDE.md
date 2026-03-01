@@ -153,3 +153,12 @@ Linear project name: indexrs (team: HHC). Design docs live in `docs/design/`, im
 - Writers use atomic temp-file-then-rename pattern for crash safety
 - Git change detection shells out to `git` CLI (no libgit2 dependency)
 - Directory walker honors `.gitignore` and `.indexrsignore` files; always skips `.git/` and `.indexrs/`
+
+# ALWAYS BEFORE COMMITTING CHANGES
+
+Before committing changes, make sure your changes pass the CI checks locally
+
+```bash
+cargo clippy --workspace -- -D warnings
+cargo fmt --all -- --check
+```
