@@ -254,16 +254,18 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
     ));
 
     let manager = SegmentManager::new(&indexrs_dir)?;
+    let progress = std::sync::Mutex::new(progress);
     manager.index_files_with_progress(files, |done, total| {
         if done % step == 0 || done == total {
             let pct = (done as f64 / total as f64 * 100.0) as u32;
-            progress.update(&format!(
+            progress.lock().unwrap().update(&format!(
                 "Building index... {}/{} ({pct}%)",
                 fmt_count(done),
                 fmt_count(total),
             ));
         }
     })?;
+    let mut progress = progress.into_inner().unwrap();
 
     let index_elapsed = index_start.elapsed();
     progress.finish(&format!(

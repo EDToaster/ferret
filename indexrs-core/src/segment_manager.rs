@@ -289,10 +289,10 @@ impl SegmentManager {
     /// Behaves identically to [`index_files`](Self::index_files) but calls
     /// `on_progress(files_done, files_total)` after each file is processed
     /// during segment building.
-    pub fn index_files_with_progress<F: FnMut(usize, usize) + Send>(
+    pub fn index_files_with_progress<F: Fn(usize, usize) + Sync + Send>(
         &self,
         files: Vec<InputFile>,
-        mut on_progress: F,
+        on_progress: F,
     ) -> Result<(), IndexError> {
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -327,7 +327,7 @@ impl SegmentManager {
             .map(|b| self.next_segment_id().map(|id| (id, b)))
             .collect::<Result<Vec<_>, _>>()?;
 
-        // Phase 3: Build segments in parallel with atomic progress counter
+        // Phase 3: Build segments in parallel, reporting progress inline
         let done = AtomicUsize::new(0);
         let segments_dir = &self.segments_dir;
 
@@ -337,19 +337,14 @@ impl SegmentManager {
                 let writer = SegmentWriter::new(segments_dir, seg_id);
                 writer
                     .build_with_progress(files, || {
-                        done.fetch_add(1, Ordering::Relaxed);
+                        let current = done.fetch_add(1, Ordering::Relaxed) + 1;
+                        on_progress(current, total);
                     })
                     .map(Arc::new)
             })
             .collect();
 
         let new_segments: Vec<Arc<Segment>> = results.into_iter().collect::<Result<Vec<_>, _>>()?;
-
-        // Report progress sequentially (callback is FnMut, not Sync)
-        let final_done = done.load(Ordering::Relaxed);
-        for i in 1..=final_done {
-            on_progress(i, total);
-        }
 
         // Phase 4: Publish
         let mut segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
