@@ -492,52 +492,7 @@ pub fn search_segments_with_pattern(
     snapshot: &SegmentList,
     pattern: &MatchPattern,
 ) -> Result<SearchResult, IndexError> {
-    let start = Instant::now();
-
-    if snapshot.is_empty() {
-        return Ok(SearchResult {
-            total_match_count: 0,
-            total_file_count: 0,
-            files: Vec::new(),
-            duration: start.elapsed(),
-        });
-    }
-
-    let mut merged: HashMap<PathBuf, (SegmentId, FileMatch)> = HashMap::new();
-
-    for segment in snapshot.iter() {
-        let tombstones = segment.load_tombstones()?;
-        let file_matches =
-            search_single_segment_with_pattern(segment, pattern, &tombstones, 0, None)?;
-
-        for fm in file_matches {
-            let seg_id = segment.segment_id();
-            match merged.get(&fm.path) {
-                Some((existing_seg_id, _)) if *existing_seg_id >= seg_id => {}
-                _ => {
-                    merged.insert(fm.path.clone(), (seg_id, fm));
-                }
-            }
-        }
-    }
-
-    let mut files: Vec<FileMatch> = merged.into_values().map(|(_, fm)| fm).collect();
-    files.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.path.cmp(&b.path))
-    });
-
-    let total_file_count = files.len();
-    let total_match_count: usize = files.iter().map(|f| f.lines.len()).sum();
-
-    Ok(SearchResult {
-        total_match_count,
-        total_file_count,
-        files,
-        duration: start.elapsed(),
-    })
+    search_segments_with_pattern_and_options(snapshot, pattern, &SearchOptions::default())
 }
 
 /// Search across multiple segments using a `MatchPattern` with options.
@@ -563,13 +518,23 @@ pub fn search_segments_with_pattern_and_options(
     let mut merged: HashMap<PathBuf, (SegmentId, FileMatch)> = HashMap::new();
 
     for segment in snapshot.iter() {
+        // Compute remaining budget for this segment
+        let segment_budget = options
+            .max_results
+            .map(|max| max.saturating_sub(merged.len()));
+
+        // Skip this segment entirely if budget is exhausted
+        if segment_budget == Some(0) {
+            break;
+        }
+
         let tombstones = segment.load_tombstones()?;
         let file_matches = search_single_segment_with_pattern(
             segment,
             pattern,
             &tombstones,
             options.context_lines,
-            None,
+            segment_budget,
         )?;
 
         for fm in file_matches {
@@ -579,6 +544,11 @@ pub fn search_segments_with_pattern_and_options(
                 _ => {
                     merged.insert(fm.path.clone(), (seg_id, fm));
                 }
+            }
+            if let Some(max) = options.max_results
+                && merged.len() >= max
+            {
+                break;
             }
         }
     }
@@ -593,11 +563,6 @@ pub fn search_segments_with_pattern_and_options(
 
     let total_file_count = files.len();
     let total_match_count: usize = files.iter().map(|f| f.lines.len()).sum();
-
-    // Apply max_results limit
-    if let Some(max) = options.max_results {
-        files.truncate(max);
-    }
 
     Ok(SearchResult {
         total_match_count,
@@ -1378,6 +1343,53 @@ mod tests {
         let limited =
             search_single_segment_with_pattern(&seg, &pattern, &tombstones, 0, Some(3)).unwrap();
         assert_eq!(limited.len(), 3);
+    }
+
+    #[test]
+    fn test_search_segments_with_pattern_and_options_early_termination() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            (0..5)
+                .map(|i| InputFile {
+                    path: format!("file_{i}.rs"),
+                    content: format!("fn f{i}() {{ println!(\"hello\"); }}\n").into_bytes(),
+                    mtime: 0,
+                })
+                .collect(),
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let pattern = MatchPattern::Literal("println".to_string());
+
+        // Without limit
+        let all = search_segments_with_pattern_and_options(
+            &snapshot,
+            &pattern,
+            &SearchOptions {
+                context_lines: 0,
+                max_results: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(all.total_file_count, 5);
+
+        // With limit=2
+        let limited = search_segments_with_pattern_and_options(
+            &snapshot,
+            &pattern,
+            &SearchOptions {
+                context_lines: 0,
+                max_results: Some(2),
+            },
+        )
+        .unwrap();
+        assert_eq!(limited.files.len(), 2);
+        assert_eq!(limited.total_file_count, 2);
     }
 
     #[test]
