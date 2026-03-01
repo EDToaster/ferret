@@ -122,6 +122,7 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
 fn handle_search_request(
     manager: &SegmentManager,
     opts: &SearchCmdOptions,
+    color: bool,
 ) -> Result<(Vec<String>, Duration), String> {
     // Validate regex patterns before searching (the core silently ignores invalid regex).
     if let MatchPattern::Regex(ref pat) = opts.pattern {
@@ -130,7 +131,7 @@ fn handle_search_request(
 
     let start = Instant::now();
     let snapshot = manager.snapshot();
-    let color = ColorConfig::new(false);
+    let color = ColorConfig::new(color);
 
     let mut buf = Vec::new();
     {
@@ -154,10 +155,11 @@ fn handle_files_request(
     path_glob: Option<String>,
     sort: String,
     limit: Option<usize>,
+    color: bool,
 ) -> Result<(Vec<String>, Duration), String> {
     let start = Instant::now();
     let snapshot = manager.snapshot();
-    let color = ColorConfig::new(false);
+    let color = ColorConfig::new(color);
 
     let sort_order = match sort.as_str() {
         "modified" => SortOrder::Modified,
@@ -234,7 +236,7 @@ async fn handle_connection(stream: UnixStream, manager: &SegmentManager) -> Resu
                 context_lines,
                 language,
                 path_glob,
-                color: _,
+                color,
             } => {
                 let pattern = search_cmd::resolve_match_pattern(
                     &query,
@@ -251,7 +253,7 @@ async fn handle_connection(stream: UnixStream, manager: &SegmentManager) -> Resu
                     path_glob,
                     stats: false,
                 };
-                match handle_search_request(manager, &opts) {
+                match handle_search_request(manager, &opts, color) {
                     Ok((lines, elapsed)) => {
                         for line in &lines {
                             let resp = serde_json::to_string(&DaemonResponse::Line {
@@ -288,8 +290,8 @@ async fn handle_connection(stream: UnixStream, manager: &SegmentManager) -> Resu
                 path_glob,
                 sort,
                 limit,
-                color: _,
-            } => match handle_files_request(manager, language, path_glob, sort, limit) {
+                color,
+            } => match handle_files_request(manager, language, path_glob, sort, limit, color) {
                 Ok((lines, elapsed)) => {
                     for line_content in &lines {
                         let resp = serde_json::to_string(&DaemonResponse::Line {
@@ -908,6 +910,80 @@ mod tests {
         // Shutdown daemon.
         let stream = try_connect(&repo_root).await.unwrap();
         let (_, mut writer) = stream.into_split();
+        let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(2), daemon_handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_daemon_search_with_color() {
+        use indexrs_core::segment::InputFile;
+
+        let dir = tempfile::tempdir().unwrap();
+        let indexrs_dir = dir.path().join(".indexrs");
+        std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+        manager
+            .index_files(vec![InputFile {
+                path: "src/main.rs".to_string(),
+                content: b"fn main() {\n    println!(\"hello world\");\n}\n".to_vec(),
+                mtime: 100,
+            }])
+            .unwrap();
+        drop(manager);
+
+        let repo_root = dir.path().to_path_buf();
+        let repo_root_clone = repo_root.clone();
+
+        let daemon_handle = tokio::spawn(async move {
+            start_daemon(&repo_root_clone).await.unwrap();
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let stream = try_connect(&repo_root).await.expect("should connect");
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        let req = serde_json::to_string(&DaemonRequest::Search {
+            query: "println".to_string(),
+            regex: false,
+            case_sensitive: false,
+            ignore_case: true,
+            limit: 100,
+            context_lines: 0,
+            language: None,
+            path_glob: None,
+            color: true,
+        })
+        .unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+
+        let mut lines = Vec::new();
+        loop {
+            let mut response_line = String::new();
+            reader.read_line(&mut response_line).await.unwrap();
+            let resp: DaemonResponse = serde_json::from_str(response_line.trim()).unwrap();
+            match resp {
+                DaemonResponse::Line { content } => lines.push(content),
+                DaemonResponse::Done { .. } => break,
+                other => panic!("unexpected response: {other:?}"),
+            }
+        }
+
+        assert!(!lines.is_empty());
+        assert!(
+            lines.iter().any(|l| l.contains("\x1b[")),
+            "expected ANSI color codes in output, got: {:?}",
+            lines
+        );
+
         let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
         writer
             .write_all(format!("{req}\n").as_bytes())
