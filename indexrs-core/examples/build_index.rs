@@ -92,14 +92,19 @@ fn full_build(dir: &PathBuf, manager: &SegmentManager) -> Result<(), Box<dyn std
         human_bytes(total_bytes)
     );
 
-    eprint!("  Building segments...");
-    let _ = std::io::stderr().flush();
     let t_build = Instant::now();
-    manager.index_files(files)?;
+    manager.index_files_with_progress(files, |done, total| {
+        if done % 100 == 0 || done == total {
+            let pct = done * 100 / total;
+            eprint!("\x1b[2K\r  Building segments... {pct}% ({done}/{total})");
+            let _ = std::io::stderr().flush();
+        }
+    })?;
+    eprintln!();
 
     let snap = manager.snapshot();
     eprintln!(
-        " {} segment(s) in {:.1?}",
+        "  Built {} segment(s) in {:.1?}",
         snap.len(),
         t_build.elapsed()
     );
