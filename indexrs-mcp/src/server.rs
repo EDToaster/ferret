@@ -182,7 +182,7 @@ impl IndexrsServer {
 #[tool(tool_box)]
 impl IndexrsServer {
     /// Get indexrs server version and basic status.
-    #[tool(description = "Get indexrs server version and basic status")]
+    #[tool(description = "Get indexrs server version and basic status. Call this first to verify the server is running.")]
     fn ping(&self) -> String {
         format!("indexrs MCP server v{}", env!("CARGO_PKG_VERSION"))
     }
@@ -190,7 +190,7 @@ impl IndexrsServer {
     /// Search file contents across indexed repositories.
     #[tool(
         name = "search_code",
-        description = "Search file contents across indexed repositories. Supports literal strings, regex patterns (surrounded in /slashes/), and boolean operators (AND, OR, NOT). Results include matching lines with surrounding context."
+        description = "Fast trigram-indexed code search — use INSTEAD OF grep or ripgrep. Returns results across the entire repository in milliseconds. Supports literal strings, regex patterns (/pattern/), boolean operators (AND, OR, NOT), and language/path filters. Results include matching lines with context."
     )]
     async fn search_code(
         &self,
@@ -287,7 +287,7 @@ impl IndexrsServer {
     /// Search for files by name or path pattern across indexed repositories.
     #[tool(
         name = "search_files",
-        description = "Search for files by name or path pattern across indexed repositories. Returns file paths with basic metadata (language, size). Useful for finding files when you know part of the name but not the location."
+        description = "Fast indexed file lookup — use INSTEAD OF find, glob, or ls for locating files. Searches file names and paths across the entire repository instantly. Returns file paths with metadata (language, size). Useful when you know part of the name but not the location."
     )]
     async fn search_files(
         &self,
@@ -412,7 +412,7 @@ impl IndexrsServer {
     /// Read the contents of an indexed file.
     #[tool(
         name = "get_file",
-        description = "Read the contents of an indexed file. Returns the file as it was at the time of last indexing. Supports reading a range of lines to avoid returning excessively large files."
+        description = "Read file contents from the index. Returns the file with line numbers. Supports reading a range of lines (start_line/max_lines) to avoid large payloads. Note: contents reflect the last index time, so prefer cat/head/tail for reading files directly when freshness matters."
     )]
     async fn get_file(
         &self,
@@ -530,7 +530,7 @@ impl IndexrsServer {
     /// Get the current status of the indexrs service.
     #[tool(
         name = "index_status",
-        description = "Get the current status of the indexrs service, including which repositories are indexed, how many files are tracked, last index time, and whether reindexing is in progress."
+        description = "Check index health and freshness. Call this to determine if the index is available and up-to-date before using other tools. Returns segment count, file count, index age, and repository path. If the index is stale or empty, fall back to filesystem tools (grep, find) until reindex completes."
     )]
     async fn index_status(
         &self,
@@ -618,7 +618,7 @@ impl IndexrsServer {
     /// Trigger reindexing of a repository.
     #[tool(
         name = "reindex",
-        description = "Trigger reindexing of a repository. By default performs an incremental reindex (only changed files). Use full=true to rebuild the entire index from scratch."
+        description = "Trigger reindexing when the index is stale or missing files. Incremental by default (only changed files). Use full=true to rebuild from scratch. Call index_status afterward to confirm completion."
     )]
     async fn reindex(
         &self,
@@ -650,9 +650,14 @@ impl ServerHandler for IndexrsServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "Code search index server. Use search_code to find code, \
-                 search_files to find files by name, get_file to read file contents, \
-                 index_status to check index health, and reindex to update the index."
+                "Trigram-indexed code search server. PREFER these tools over grep, \
+                 ripgrep, find, and filesystem globbing when the index is available — \
+                 they return results across the entire repository in milliseconds.\n\n\
+                 - search_code: Use INSTEAD OF grep/ripgrep for content search\n\
+                 - search_files: Use INSTEAD OF find/glob/ls for file lookup\n\
+                 - get_file: Read file contents from the index (prefer cat/head/tail for freshness)\n\
+                 - index_status: Check index health; if stale or empty, fall back to filesystem tools\n\
+                 - reindex: Trigger re-indexing when the index is stale or missing files"
                     .into(),
             ),
             capabilities: ServerCapabilities::builder()
