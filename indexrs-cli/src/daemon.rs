@@ -261,7 +261,6 @@ fn format_and_send_file_match(
     color: &ColorConfig,
     path_rewriter: &PathRewriter,
     glob_matcher: &Option<globset::GlobMatcher>,
-    language_filter: &Option<String>,
     tx: &tokio::sync::mpsc::UnboundedSender<String>,
 ) -> bool {
     let raw_path = file_match.path.to_string_lossy();
@@ -269,13 +268,6 @@ fn format_and_send_file_match(
     // Path filter
     if let Some(matcher) = glob_matcher
         && !matcher.is_match(raw_path.as_ref())
-    {
-        return true; // filtered out, keep going
-    }
-
-    // Language filter
-    if let Some(lang) = language_filter
-        && !file_match.language.to_string().eq_ignore_ascii_case(lang)
     {
         return true; // filtered out, keep going
     }
@@ -471,6 +463,22 @@ async fn handle_connection(
                     continue;
                 }
 
+                let query = match search_cmd::flags_to_query(&pattern, language.as_deref()) {
+                    Ok(q) => q,
+                    Err(e) => {
+                        let resp = serde_json::to_string(&DaemonResponse::Error {
+                            message: e.to_string(),
+                        })
+                        .unwrap();
+                        writer
+                            .write_all(format!("{resp}\n").as_bytes())
+                            .await
+                            .map_err(IndexError::Io)?;
+                        line.clear();
+                        continue;
+                    }
+                };
+
                 let color_config = ColorConfig::new(color);
                 let start = Instant::now();
                 let snapshot = manager.snapshot();
@@ -484,13 +492,12 @@ async fn handle_connection(
                     .and_then(|g| globset::Glob::new(g).ok().map(|g| g.compile_matcher()));
 
                 let (search_tx, search_rx) = std::sync::mpsc::channel();
-                let pattern_clone = pattern.clone();
 
-                // Spawn blocking search thread (same pattern as run_search_streaming).
+                // Spawn blocking search thread using query-based streaming.
                 let search_handle = tokio::task::spawn_blocking(move || {
-                    indexrs_core::multi_search::search_segments_streaming(
+                    indexrs_core::multi_search::search_segments_with_query_streaming(
                         &snapshot,
-                        &pattern_clone,
+                        &query,
                         &search_opts,
                         search_tx,
                     )
@@ -501,7 +508,6 @@ async fn handle_connection(
 
                 let bridge_handle = tokio::task::spawn_blocking({
                     let async_tx = async_tx.clone();
-                    let language_filter = language.clone();
                     move || {
                         for file_match in search_rx {
                             if !format_and_send_file_match(
@@ -509,7 +515,6 @@ async fn handle_connection(
                                 &color_config,
                                 &path_rewriter,
                                 &glob_matcher,
-                                &language_filter,
                                 &async_tx,
                             ) {
                                 break; // receiver dropped
