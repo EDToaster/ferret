@@ -210,6 +210,51 @@ impl ContentStoreReader {
         }
         Ok(output)
     }
+
+    /// Read and decompress content with a pre-allocation hint.
+    ///
+    /// Like [`read_content()`](Self::read_content) but pre-allocates the output
+    /// buffer to `size_hint` bytes, avoiding reallocation during decompression.
+    /// The `size_hint` should be the original uncompressed file size from metadata.
+    pub fn read_content_with_size_hint(
+        &self,
+        offset: u64,
+        compressed_len: u32,
+        size_hint: usize,
+    ) -> crate::Result<Vec<u8>> {
+        let start = usize::try_from(offset).map_err(|_| {
+            IndexError::IndexCorruption(format!("content offset {offset} exceeds address space"))
+        })?;
+        let clen = compressed_len as usize;
+        let end = start.checked_add(clen).ok_or_else(|| {
+            IndexError::IndexCorruption(format!("content range overflow: {start} + {clen}"))
+        })?;
+
+        if end > self.mmap.len() {
+            return Err(IndexError::IndexCorruption(format!(
+                "content read out of bounds: offset={offset}, len={compressed_len}, \
+                 store size={}",
+                self.mmap.len()
+            )));
+        }
+
+        let compressed = &self.mmap[start..end];
+        let decoder = zstd::stream::Decoder::new(compressed)
+            .map_err(|e| IndexError::IndexCorruption(format!("zstd decoder init failed: {e}")))?;
+        // Pre-allocate to avoid reallocation; cap at MAX_DECOMPRESSED_SIZE
+        let capacity = size_hint.min(MAX_DECOMPRESSED_SIZE);
+        let mut output = Vec::with_capacity(capacity);
+        let bytes_read = decoder
+            .take(MAX_DECOMPRESSED_SIZE as u64 + 1)
+            .read_to_end(&mut output)
+            .map_err(|e| IndexError::IndexCorruption(format!("zstd decompression failed: {e}")))?;
+        if bytes_read > MAX_DECOMPRESSED_SIZE {
+            return Err(IndexError::IndexCorruption(format!(
+                "decompressed content exceeds size limit of {MAX_DECOMPRESSED_SIZE} bytes"
+            )));
+        }
+        Ok(output)
+    }
 }
 
 #[cfg(test)]

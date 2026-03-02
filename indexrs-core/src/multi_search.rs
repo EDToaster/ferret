@@ -359,7 +359,7 @@ fn search_single_segment_with_context(
 
             let content = segment
                 .content_reader()
-                .read_content(meta.content_offset, meta.content_len)
+                .read_content_with_size_hint(meta.content_offset, meta.content_len, meta.size_bytes as usize)
                 .ok()?;
 
             let line_matches = verify_content_matches(&content, query, context_lines);
@@ -431,7 +431,7 @@ fn search_single_segment_with_context_seq(
 
         let content = segment
             .content_reader()
-            .read_content(meta.content_offset, meta.content_len)?;
+            .read_content_with_size_hint(meta.content_offset, meta.content_len, meta.size_bytes as usize)?;
 
         let line_matches = verify_content_matches(&content, query, context_lines);
         if line_matches.is_empty() {
@@ -526,7 +526,7 @@ fn verify_candidate_with_pattern(
 
     let content = segment
         .content_reader()
-        .read_content(meta.content_offset, meta.content_len)
+        .read_content_with_size_hint(meta.content_offset, meta.content_len, meta.size_bytes as usize)
         .ok()?;
 
     let line_matches = if context_lines > 0 {
@@ -1165,7 +1165,7 @@ fn search_single_segment_with_query(
 
         let content = segment
             .content_reader()
-            .read_content(meta.content_offset, meta.content_len)
+            .read_content_with_size_hint(meta.content_offset, meta.content_len, meta.size_bytes as usize)
             .ok()?;
 
         let line_matches = matcher.matches(&content)?;
