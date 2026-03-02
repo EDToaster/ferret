@@ -56,6 +56,7 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
     match cli.command {
         Command::Search {
             query,
+            query_mode,
             regex,
             case_sensitive,
             ignore_case,
@@ -71,6 +72,47 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
             if !repo_root.join(".indexrs").join("segments").exists() {
                 eprintln!("error: no index found. Run 'indexrs init' first.");
                 return Ok(ExitCode::Error);
+            }
+
+            // --query mode: validate mutual exclusion and dispatch.
+            if query_mode {
+                let mut conflicts = Vec::new();
+                if regex {
+                    conflicts.push("--regex");
+                }
+                if case_sensitive {
+                    conflicts.push("--case-sensitive");
+                }
+                if ignore_case {
+                    conflicts.push("--ignore-case");
+                }
+                if smart_case {
+                    conflicts.push("--smart-case");
+                }
+                if language.is_some() {
+                    conflicts.push("--language");
+                }
+                if path.is_some() {
+                    conflicts.push("--path");
+                }
+                if !conflicts.is_empty() {
+                    eprintln!(
+                        "error: --query cannot be combined with {}",
+                        conflicts.join(", ")
+                    );
+                    return Ok(ExitCode::Error);
+                }
+
+                let request = daemon::DaemonRequest::QuerySearch {
+                    query,
+                    limit,
+                    context_lines: context.unwrap_or(0),
+                    color: color.enabled,
+                    cwd: cwd.clone(),
+                };
+                let stdout = std::io::stdout();
+                let mut writer = StreamingWriter::new(stdout.lock());
+                return daemon::run_via_daemon(&repo_root, request, &mut writer).await;
             }
 
             // Resolve smart case: daemon uses explicit case flags, not smart_case.

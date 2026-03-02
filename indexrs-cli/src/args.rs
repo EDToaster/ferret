@@ -52,6 +52,12 @@ pub enum Command {
         /// Search query string
         query: String,
 
+        /// Use the advanced query language (supports AND, OR, NOT, "phrases",
+        /// /regex/, path:, language:, case:yes). Mutually exclusive with
+        /// --regex, --case-sensitive, --ignore-case, --smart-case, --language, --path.
+        #[arg(long = "query")]
+        query_mode: bool,
+
         /// Interpret query as a regex pattern
         #[arg(long)]
         regex: bool,
