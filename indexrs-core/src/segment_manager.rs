@@ -474,6 +474,7 @@ impl SegmentManager {
             let mut existing = segment.load_tombstones()?;
             existing.merge(new_tombstones);
             existing.write_to(&segment.dir_path().join("tombstones.bin"))?;
+            segment.set_cached_tombstones(existing);
         }
 
         self.state.publish(updated_segments);
