@@ -263,7 +263,7 @@ pub fn format_file_list(
         } else {
             format!("{}", entry.language)
         };
-        let size_str = format_entry_size(entry.size_bytes);
+        let size_str = format_size(entry.size_bytes as u64);
         if lang_str.is_empty() {
             writeln!(out, "{}    ({size_str})", entry.path).unwrap();
         } else {
@@ -441,8 +441,8 @@ fn format_match_line(out: &mut String, line_match: &LineMatch) {
     writeln!(out, "L{}:* {}", line_match.line_number, line_match.content).unwrap();
 }
 
-/// Format a byte size as a human-readable string (u64 version).
-fn format_size(bytes: u64) -> String {
+/// Format a byte size as a human-readable string.
+pub fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{bytes} B")
     } else if bytes < 1024 * 1024 {
@@ -451,17 +451,6 @@ fn format_size(bytes: u64) -> String {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     } else {
         format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
-}
-
-/// Format a byte size as a human-readable string (u32 version, for file list entries).
-fn format_entry_size(bytes: u32) -> String {
-    if bytes >= 1_048_576 {
-        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
-    } else if bytes >= 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else {
-        format!("{bytes} B")
     }
 }
 
@@ -982,28 +971,6 @@ mod tests {
     #[test]
     fn test_format_size_gigabytes() {
         assert_eq!(format_size(1024 * 1024 * 1024), "1.0 GB");
-    }
-
-    // ---- format_entry_size helper (u32 version) ----
-
-    #[test]
-    fn test_format_entry_size_bytes() {
-        assert_eq!(format_entry_size(0), "0 B");
-        assert_eq!(format_entry_size(512), "512 B");
-        assert_eq!(format_entry_size(1023), "1023 B");
-    }
-
-    #[test]
-    fn test_format_entry_size_kilobytes() {
-        assert_eq!(format_entry_size(1024), "1.0 KB");
-        assert_eq!(format_entry_size(2150), "2.1 KB");
-        assert_eq!(format_entry_size(1_048_575), "1024.0 KB");
-    }
-
-    #[test]
-    fn test_format_entry_size_megabytes() {
-        assert_eq!(format_entry_size(1_048_576), "1.0 MB");
-        assert_eq!(format_entry_size(10_485_760), "10.0 MB");
     }
 
     // ---- format_duration_approx helper ----

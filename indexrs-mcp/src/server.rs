@@ -508,7 +508,7 @@ impl IndexrsServer {
             ));
             output.push_str(&format!(
                 "Index size: {} (disk)\n",
-                format_size(total_disk_bytes)
+                formatter::format_size(total_disk_bytes)
             ));
             output.push_str(&format!("Uptime: {uptime}\n"));
 
@@ -526,7 +526,7 @@ impl IndexrsServer {
                         entry_count,
                         live,
                         tombstones.len(),
-                        format_size(disk),
+                        formatter::format_size(disk),
                     ));
                 }
             }
@@ -550,7 +550,7 @@ impl IndexrsServer {
             }
             output.push_str(&format!(
                 "Index size: {} (disk)\n",
-                format_size(total_disk_bytes)
+                formatter::format_size(total_disk_bytes)
             ));
 
             Ok(CallToolResult::success(vec![Content::text(output)]))
@@ -880,19 +880,6 @@ fn format_uptime(duration: std::time::Duration) -> String {
     }
 }
 
-/// Format a byte count as a human-readable size string.
-fn format_size(bytes: u64) -> String {
-    if bytes >= 1_073_741_824 {
-        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
-    } else if bytes >= 1_048_576 {
-        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
-    } else if bytes >= 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
 /// Compute total disk size of a segment directory by summing file sizes.
 fn segment_disk_size(segment: &indexrs_core::segment::Segment) -> u64 {
     let dir = segment.dir_path();
@@ -1094,16 +1081,6 @@ mod tests {
             format_uptime(std::time::Duration::from_secs(3600 * 4 + 60 * 32)),
             "4h 32m"
         );
-    }
-
-    #[test]
-    fn test_format_size() {
-        assert_eq!(format_size(0), "0 B");
-        assert_eq!(format_size(512), "512 B");
-        assert_eq!(format_size(1024), "1.0 KB");
-        assert_eq!(format_size(1_048_576), "1.0 MB");
-        assert_eq!(format_size(25_690_112), "24.5 MB");
-        assert_eq!(format_size(1_073_741_824), "1.0 GB");
     }
 
     // ---- IndexStatusParams / ReindexParams deserialization tests ----

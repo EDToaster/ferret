@@ -17,6 +17,8 @@ use rmcp::model::{
 
 use indexrs_core::{IndexState, Language, Segment};
 
+use crate::formatter::format_size;
+
 /// Return the list of static resources.
 pub fn list_resources() -> ListResourcesResult {
     ListResourcesResult {
@@ -174,7 +176,7 @@ fn read_status(state: &Arc<IndexState>) -> String {
         out.push_str(&format!(" ({total_tombstoned} tombstoned)"));
     }
     out.push('\n');
-    out.push_str(&format!("Total size: {}\n", format_bytes(total_size_bytes)));
+    out.push_str(&format!("Total size: {}\n", format_size(total_size_bytes)));
     out
 }
 
@@ -282,7 +284,7 @@ fn read_repo_status(state: &Arc<IndexState>) -> String {
         out.push_str(&format!(" / {total_tombstoned} tombstoned"));
     }
     out.push('\n');
-    out.push_str(&format!("Total size: {}\n", format_bytes(total_size_bytes)));
+    out.push_str(&format!("Total size: {}\n", format_size(total_size_bytes)));
 
     if !lang_counts.is_empty() {
         out.push_str("Languages:");
@@ -327,19 +329,6 @@ fn collect_live_paths(segments: &[Arc<Segment>]) -> Vec<String> {
     }
 
     paths
-}
-
-/// Format a byte count as a human-readable string.
-fn format_bytes(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{bytes} B")
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
 }
 
 #[cfg(test)]
@@ -423,18 +412,6 @@ mod tests {
     #[test]
     fn test_parse_repo_unknown_action() {
         assert_eq!(parse_uri("indexrs://repo/myproject/unknown"), None);
-    }
-
-    // ---- format_bytes tests ----
-
-    #[test]
-    fn test_format_bytes() {
-        assert_eq!(format_bytes(0), "0 B");
-        assert_eq!(format_bytes(512), "512 B");
-        assert_eq!(format_bytes(1024), "1.0 KB");
-        assert_eq!(format_bytes(1536), "1.5 KB");
-        assert_eq!(format_bytes(1_048_576), "1.0 MB");
-        assert_eq!(format_bytes(1_073_741_824), "1.0 GB");
     }
 
     // ---- read_status tests ----
