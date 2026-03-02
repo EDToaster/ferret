@@ -8,6 +8,7 @@ mod paths;
 mod preview;
 mod repo;
 mod search_cmd;
+mod status;
 mod wire;
 
 use std::io::IsTerminal;
@@ -213,11 +214,7 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
         }
         Command::Status => {
             let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
-            let manager = repo::load_index(&repo_root)?;
-            let snapshot = manager.snapshot();
-            let file_count: usize = snapshot.iter().map(|s| s.entry_count() as usize).sum();
-            println!("Segments: {}", snapshot.len());
-            println!("Files: {file_count}");
+            status::run_status(&repo_root)?;
             Ok(ExitCode::Success)
         }
         Command::Reindex { full } => {
