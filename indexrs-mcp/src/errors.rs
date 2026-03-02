@@ -90,6 +90,16 @@ pub fn index_building(progress_pct: Option<f64>) -> CallToolResult {
     CallToolResult::error(vec![Content::text(msg)])
 }
 
+/// Create an error response for a daemon communication failure.
+///
+/// Used when the daemon is unreachable, times out, or returns a
+/// protocol-level error — distinct from a query syntax error.
+pub fn daemon_dispatch_error(msg: &str) -> CallToolResult {
+    CallToolResult::error(vec![Content::text(format!(
+        "Error: Daemon request failed: {msg}"
+    ))])
+}
+
 /// Create a response for when a search returns no results.
 ///
 /// This is NOT an error -- it's a valid empty result with suggestions.
@@ -283,5 +293,24 @@ mod tests {
         assert_eq!(result.is_error, Some(false));
         let text = extract_text(&result);
         assert!(text.contains("try a shorter query"));
+    }
+
+    // ---- daemon_dispatch_error ----
+
+    #[test]
+    fn test_daemon_dispatch_error() {
+        let result = daemon_dispatch_error("connection refused");
+        assert_eq!(result.is_error, Some(true));
+        let text = extract_text(&result);
+        assert!(text.contains("connection refused"));
+        assert!(!text.contains("Invalid query"));
+    }
+
+    #[test]
+    fn test_daemon_dispatch_error_timeout() {
+        let result = daemon_dispatch_error("daemon did not start within timeout");
+        assert_eq!(result.is_error, Some(true));
+        let text = extract_text(&result);
+        assert!(text.contains("timeout"));
     }
 }

@@ -205,7 +205,7 @@ impl IndexrsServer {
     /// Search file contents across indexed repositories.
     #[tool(
         name = "search_code",
-        description = "Fast trigram-indexed code search — use INSTEAD OF grep or ripgrep. Returns results across the entire repository in milliseconds. Supports literal strings, regex patterns (/pattern/), boolean operators (AND, OR, NOT), and language/path filters. Results include matching lines with context."
+        description = "Fast trigram-indexed code search — use INSTEAD OF grep, ripgrep, or other built in tools with large repositories. Returns results across the entire repository in milliseconds. Supports literal strings, regex patterns (/pattern/), boolean operators (AND, OR, NOT), and language/path filters. Results include matching lines with context."
     )]
     async fn search_code(
         &self,
@@ -261,7 +261,7 @@ impl IndexrsServer {
                     return Ok(CallToolResult::success(vec![Content::text(text)]));
                 }
                 Err(e) => {
-                    return Ok(errors::invalid_query(&e));
+                    return Ok(errors::daemon_dispatch_error(&e));
                 }
             }
         }
@@ -336,7 +336,7 @@ impl IndexrsServer {
                     return Ok(CallToolResult::success(vec![Content::text(text)]));
                 }
                 Err(e) => {
-                    return Ok(errors::invalid_query(&e));
+                    return Ok(errors::daemon_dispatch_error(&e));
                 }
             }
         }
