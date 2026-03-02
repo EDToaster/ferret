@@ -16,6 +16,7 @@ pub mod metadata;
 pub mod multi_search;
 pub mod posting;
 pub mod query;
+pub mod query_match;
 pub mod query_plan;
 pub mod query_trigrams;
 pub mod ranking;
@@ -57,6 +58,7 @@ pub use multi_search::{
 };
 pub use posting::PostingListBuilder;
 pub use query::{LiteralQuery, PhraseQuery, Query, RegexQuery, parse_query};
+pub use query_match::QueryMatcher;
 pub use query_plan::{
     PreFilter, QueryInput, QueryPlan, ScoredTrigram, VerifyStep, plan_literal_query, plan_query,
     plan_query_multi, plan_regex_query,
