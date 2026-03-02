@@ -53,6 +53,11 @@ async fn write_string_frame<W: AsyncWriteExt + Unpin>(
 /// Build a Line TLV frame synchronously (for use on blocking threads).
 pub fn encode_line_frame(content: &str) -> Vec<u8> {
     let payload = content.as_bytes();
+    assert!(
+        payload.len() <= MAX_STRING_PAYLOAD as usize,
+        "string payload too large to encode: {} bytes (max {MAX_STRING_PAYLOAD})",
+        payload.len()
+    );
     let mut frame = Vec::with_capacity(5 + payload.len());
     frame.push(TAG_LINE);
     frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
@@ -335,5 +340,19 @@ mod tests {
         // tag=0x04, len=0, total 5 bytes
         assert_eq!(buf, vec![0x04, 0x00, 0x00, 0x00, 0x00]);
         assert_eq!(buf.len(), 5);
+    }
+
+    #[test]
+    #[should_panic(expected = "payload too large")]
+    fn test_encode_line_frame_rejects_oversized() {
+        let huge = "x".repeat(MAX_STRING_PAYLOAD as usize + 1);
+        encode_line_frame(&huge);
+    }
+
+    #[test]
+    fn test_encode_line_frame_accepts_max_size() {
+        let max = "x".repeat(MAX_STRING_PAYLOAD as usize);
+        let frame = encode_line_frame(&max);
+        assert_eq!(frame.len(), 5 + MAX_STRING_PAYLOAD as usize);
     }
 }
