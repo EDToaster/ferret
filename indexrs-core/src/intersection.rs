@@ -81,7 +81,7 @@ pub fn intersect_file_ids(lists: &[Vec<FileId>]) -> Vec<FileId> {
 }
 
 /// Intersect two sorted FileId vectors using two-pointer merge.
-fn intersect_two(a: &[FileId], b: &[FileId]) -> Vec<FileId> {
+pub fn intersect_two(a: &[FileId], b: &[FileId]) -> Vec<FileId> {
     let mut result = Vec::new();
     let mut i = 0;
     let mut j = 0;

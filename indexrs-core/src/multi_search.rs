@@ -14,7 +14,7 @@ use rayon::prelude::*;
 
 use crate::error::IndexError;
 use crate::index_state::SegmentList;
-use crate::intersection::{find_candidates, intersect_file_ids};
+use crate::intersection::{find_candidates, intersect_two};
 use crate::metadata::FileMetadata;
 use crate::query::Query;
 use crate::query_match::QueryMatcher;
@@ -984,41 +984,30 @@ fn passes_pre_filters(
     true
 }
 
-/// Look up candidate file IDs from a segment's trigram index using a `TrigramQuery`.
+/// Look up trigram candidates from a segment using the pre-extracted TrigramQuery.
 ///
-/// - `All(trigrams)`: intersect posting lists for all trigrams
-/// - `Any(branches)`: for each branch intersect its trigrams, then union all branches
-/// - `None`: full scan (return all file IDs in the segment)
+/// For `All` queries, trigrams are sorted by estimated posting list size
+/// (smallest first) and intersected incrementally. If any trigram has zero
+/// postings or an intermediate intersection becomes empty, remaining lists
+/// are skipped entirely.
+///
+/// For `Any` queries, each branch is processed the same way and results
+/// are unioned.
 fn lookup_trigram_candidates(
     segment: &Segment,
     tq: &TrigramQuery,
 ) -> Result<Vec<FileId>, IndexError> {
     match tq {
         TrigramQuery::All(trigrams) => {
-            let lists: Vec<Vec<FileId>> = trigrams
-                .iter()
-                .map(|t| {
-                    segment
-                        .trigram_reader()
-                        .lookup_file_ids(*t)
-                        .unwrap_or_default()
-                })
-                .collect();
-            Ok(intersect_file_ids(&lists))
+            if trigrams.is_empty() {
+                return segment.all_file_ids();
+            }
+            intersect_trigrams_smallest_first(segment, trigrams)
         }
         TrigramQuery::Any(branches) => {
             let mut all_candidates: Vec<FileId> = Vec::new();
             for branch in branches {
-                let lists: Vec<Vec<FileId>> = branch
-                    .iter()
-                    .map(|t| {
-                        segment
-                            .trigram_reader()
-                            .lookup_file_ids(*t)
-                            .unwrap_or_default()
-                    })
-                    .collect();
-                let candidates = intersect_file_ids(&lists);
+                let candidates = intersect_trigrams_smallest_first(segment, branch)?;
                 all_candidates.extend(candidates);
             }
             all_candidates.sort();
@@ -1027,6 +1016,46 @@ fn lookup_trigram_candidates(
         }
         TrigramQuery::None => segment.all_file_ids(),
     }
+}
+
+/// Sort trigrams by estimated posting list size, then decode and intersect
+/// incrementally with early termination.
+fn intersect_trigrams_smallest_first(
+    segment: &Segment,
+    trigrams: &std::collections::HashSet<crate::types::Trigram>,
+) -> Result<Vec<FileId>, IndexError> {
+    let reader = segment.trigram_reader();
+
+    // Score each trigram by estimated posting list byte size (cheap: O(log n) per trigram)
+    let mut scored: Vec<_> = trigrams
+        .iter()
+        .map(|t| (*t, reader.estimate_posting_list_size(*t)))
+        .collect();
+
+    // Sort smallest first — smallest lists narrow the intersection fastest
+    scored.sort_by_key(|&(_, est)| est);
+
+    // Short-circuit: if the smallest trigram has zero postings, no files can match
+    if scored[0].1 == 0 {
+        return Ok(Vec::new());
+    }
+
+    // Decode the smallest list first
+    let mut result = reader.lookup_file_ids(scored[0].0)?;
+    if result.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Intersect incrementally, bailing as soon as the result is empty
+    for &(trigram, _) in &scored[1..] {
+        let list = reader.lookup_file_ids(trigram)?;
+        result = intersect_two(&result, &list);
+        if result.is_empty() {
+            return Ok(Vec::new());
+        }
+    }
+
+    Ok(result)
 }
 
 /// Search across multiple segments using a parsed `Query` AST.
@@ -2952,5 +2981,59 @@ mod tests {
         let matches: Vec<FileMatch> = rx.into_iter().collect();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].path, PathBuf::from("main.rs"));
+    }
+
+    #[test]
+    fn test_lookup_candidates_smallest_first_correctness() {
+        // Build a segment where file 0 has many trigrams and file 1 has few.
+        // A query that requires trigrams from both should return the correct intersection.
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let files = vec![
+            InputFile {
+                path: "a.rs".to_string(),
+                // Contains many unique trigrams
+                content: b"fn alpha_beta_gamma_delta() { return 42; }".to_vec(),
+                mtime: 0,
+            },
+            InputFile {
+                path: "b.rs".to_string(),
+                // Shares "fn " trigram but NOT "alp", "lph", "pha" etc.
+                content: b"fn other() { return 99; }".to_vec(),
+                mtime: 0,
+            },
+            InputFile {
+                path: "c.rs".to_string(),
+                content: b"fn alpha_beta_gamma_delta() { return 0; }".to_vec(),
+                mtime: 0,
+            },
+        ];
+
+        let segment_id = SegmentId(0);
+        let writer = crate::segment::SegmentWriter::new(&base_dir, segment_id);
+        let segment = writer.build(files).unwrap();
+
+        // Query "alpha_beta" should match files 0 and 2 (not file 1)
+        let tq = crate::query_trigrams::extract_query_trigrams(&crate::query::Query::Literal(
+            crate::query::LiteralQuery {
+                text: "alpha_beta".to_string(),
+                case_sensitive: false,
+            },
+        ));
+
+        let candidates = lookup_trigram_candidates(&segment, &tq).unwrap();
+        assert_eq!(candidates, vec![FileId(0), FileId(2)]);
+
+        // Query with a trigram NOT in the index should return empty
+        let tq_none = crate::query_trigrams::extract_query_trigrams(&crate::query::Query::Literal(
+            crate::query::LiteralQuery {
+                text: "zzzzzzz".to_string(),
+                case_sensitive: false,
+            },
+        ));
+        let candidates_none = lookup_trigram_candidates(&segment, &tq_none).unwrap();
+        assert!(candidates_none.is_empty());
     }
 }
