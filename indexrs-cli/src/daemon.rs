@@ -289,12 +289,7 @@ fn format_and_send_file_match(
             &line_match.ranges,
         );
 
-        let payload = line.as_bytes();
-        let mut frame = Vec::with_capacity(5 + payload.len());
-        frame.push(crate::wire::TAG_LINE);
-        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        frame.extend_from_slice(payload);
-        if tx.send(frame).is_err() {
+        if tx.send(crate::wire::encode_line_frame(&line)).is_err() {
             return false; // receiver dropped, stop
         }
     }

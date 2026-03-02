@@ -16,7 +16,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::daemon::DaemonResponse;
 
-pub(crate) const TAG_LINE: u8 = 0x01;
+const TAG_LINE: u8 = 0x01;
 const TAG_DONE: u8 = 0x02;
 const TAG_ERROR: u8 = 0x03;
 const TAG_PONG: u8 = 0x04;
@@ -34,11 +34,30 @@ async fn write_string_frame<W: AsyncWriteExt + Unpin>(
     s: &str,
 ) -> io::Result<()> {
     let payload = s.as_bytes();
+    if payload.len() > MAX_STRING_PAYLOAD as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "string payload too large to encode: {} bytes",
+                payload.len()
+            ),
+        ));
+    }
     let mut header = [0u8; 5];
     header[0] = tag;
     header[1..5].copy_from_slice(&(payload.len() as u32).to_le_bytes());
     writer.write_all(&header).await?;
     writer.write_all(payload).await
+}
+
+/// Build a Line TLV frame synchronously (for use on blocking threads).
+pub(crate) fn encode_line_frame(content: &str) -> Vec<u8> {
+    let payload = content.as_bytes();
+    let mut frame = Vec::with_capacity(5 + payload.len());
+    frame.push(TAG_LINE);
+    frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    frame.extend_from_slice(payload);
+    frame
 }
 
 /// Read `len` bytes from the reader and convert to a UTF-8 string.
