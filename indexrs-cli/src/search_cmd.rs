@@ -6,7 +6,7 @@ use indexrs_core::index_state::SegmentList;
 use indexrs_core::multi_search::{
     search_segments_streaming, search_segments_with_pattern_and_options, search_segments_with_query,
 };
-use indexrs_core::query::parse_query;
+use indexrs_core::query::{LiteralQuery, Query, RegexQuery, match_language, parse_query};
 use indexrs_core::search::{MatchPattern, SearchOptions};
 
 use crate::color::ColorConfig;
@@ -51,6 +51,37 @@ pub fn resolve_match_pattern(
     } else {
         MatchPattern::LiteralCaseInsensitive(query.to_string())
     }
+}
+
+/// Convert CLI flags (pattern + optional language) into a Query AST.
+///
+/// Maps MatchPattern variants to Query leaf nodes. If a language filter is
+/// provided, wraps the content query in an AND with LanguageFilter.
+///
+/// Path glob is NOT included here — Query::PathFilter is prefix-based,
+/// but --path supports globs. Path glob filtering stays post-hoc in CLI.
+pub fn flags_to_query(pattern: &MatchPattern, language: Option<&str>) -> Result<Query, IndexError> {
+    let content_query = match pattern {
+        MatchPattern::Literal(s) => Query::Literal(LiteralQuery {
+            text: s.clone(),
+            case_sensitive: true,
+        }),
+        MatchPattern::LiteralCaseInsensitive(s) => Query::Literal(LiteralQuery {
+            text: s.clone(),
+            case_sensitive: false,
+        }),
+        MatchPattern::Regex(s) => Query::Regex(RegexQuery {
+            pattern: s.clone(),
+            case_sensitive: true,
+        }),
+    };
+
+    let Some(lang_str) = language else {
+        return Ok(content_query);
+    };
+
+    let lang = match_language(lang_str)?;
+    Ok(Query::And(vec![Query::LanguageFilter(lang), content_query]))
 }
 
 /// Run the search command: search segments, format as vimgrep, stream to output.
@@ -514,5 +545,62 @@ mod tests {
             "path should not have src/ prefix"
         );
         assert!(matches!(exit, ExitCode::Success));
+    }
+
+    #[test]
+    fn test_flags_to_query_case_insensitive() {
+        let pattern = MatchPattern::LiteralCaseInsensitive("hello".to_string());
+        let query = flags_to_query(&pattern, None).unwrap();
+        assert_eq!(
+            query,
+            Query::Literal(LiteralQuery {
+                text: "hello".to_string(),
+                case_sensitive: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_flags_to_query_case_sensitive() {
+        let pattern = MatchPattern::Literal("Hello".to_string());
+        let query = flags_to_query(&pattern, None).unwrap();
+        assert_eq!(
+            query,
+            Query::Literal(LiteralQuery {
+                text: "Hello".to_string(),
+                case_sensitive: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_flags_to_query_regex() {
+        let pattern = MatchPattern::Regex("fn\\s+".to_string());
+        let query = flags_to_query(&pattern, None).unwrap();
+        assert_eq!(
+            query,
+            Query::Regex(RegexQuery {
+                pattern: "fn\\s+".to_string(),
+                case_sensitive: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_flags_to_query_with_language() {
+        let pattern = MatchPattern::LiteralCaseInsensitive("println".to_string());
+        let query = flags_to_query(&pattern, Some("rust")).unwrap();
+        if let Query::And(children) = &query {
+            assert_eq!(children.len(), 2);
+            assert!(matches!(children[0], Query::LanguageFilter(_)));
+        } else {
+            panic!("expected And, got {query:?}");
+        }
+    }
+
+    #[test]
+    fn test_flags_to_query_unknown_language() {
+        let pattern = MatchPattern::LiteralCaseInsensitive("hello".to_string());
+        assert!(flags_to_query(&pattern, Some("brainfuck")).is_err());
     }
 }
