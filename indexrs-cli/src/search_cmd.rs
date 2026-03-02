@@ -138,6 +138,7 @@ pub fn run_search<W: std::io::Write>(
 /// Uses `search_segments_streaming` to send results through a channel,
 /// formatting and writing each one as it arrives. This gives the user
 /// immediate feedback, which is critical for fzf integration.
+#[allow(dead_code)]
 pub fn run_search_streaming<W: std::io::Write>(
     snapshot: &SegmentList,
     opts: &SearchCmdOptions,

@@ -16,9 +16,7 @@ impl PathRewriter {
         let repo_root = repo_root
             .canonicalize()
             .unwrap_or_else(|_| repo_root.to_path_buf());
-        let cwd = cwd
-            .canonicalize()
-            .unwrap_or_else(|_| cwd.to_path_buf());
+        let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
 
         if cwd == repo_root {
             return Self::identity();

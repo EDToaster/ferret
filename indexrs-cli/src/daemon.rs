@@ -19,7 +19,7 @@ use crate::color::ColorConfig;
 use crate::files::{self, FilesFilter};
 use crate::output::{ExitCode, StreamingWriter};
 use crate::paths::PathRewriter;
-use crate::search_cmd::{self, SearchCmdOptions};
+use crate::search_cmd;
 
 /// Idle timeout before daemon self-terminates.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
@@ -247,36 +247,56 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
     }
 }
 
-/// Execute a search against the loaded index and return the result lines with elapsed time.
-fn handle_search_request(
-    manager: &SegmentManager,
-    opts: &SearchCmdOptions,
-    color: bool,
+/// Format a FileMatch into vimgrep-style output lines and send each as a
+/// DaemonResponse::Line JSON string through the channel.
+fn format_and_send_file_match(
+    file_match: &indexrs_core::search::FileMatch,
+    color: &ColorConfig,
     path_rewriter: &PathRewriter,
-) -> Result<(Vec<String>, Duration), String> {
-    // Validate regex patterns before searching (the core silently ignores invalid regex).
-    if let MatchPattern::Regex(ref pat) = opts.pattern {
-        regex::Regex::new(pat).map_err(|e| format!("invalid regex: {e}"))?;
-    }
+    glob_matcher: &Option<globset::GlobMatcher>,
+    language_filter: &Option<String>,
+    tx: &tokio::sync::mpsc::UnboundedSender<String>,
+) -> bool {
+    let raw_path = file_match.path.to_string_lossy();
 
-    let start = Instant::now();
-    let snapshot = manager.snapshot();
-    let color = ColorConfig::new(color);
-
-    let mut buf = Vec::new();
+    // Path filter
+    if let Some(matcher) = glob_matcher
+        && !matcher.is_match(raw_path.as_ref())
     {
-        let mut writer = StreamingWriter::new(&mut buf);
-        search_cmd::run_search_streaming(&snapshot, opts, &color, path_rewriter, &mut writer)
-            .map_err(|e| e.to_string())?;
+        return true; // filtered out, keep going
     }
 
-    let output = String::from_utf8_lossy(&buf);
-    let lines: Vec<String> = output
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| l.to_string())
-        .collect();
-    Ok((lines, start.elapsed()))
+    // Language filter
+    if let Some(lang) = language_filter
+        && !file_match.language.to_string().eq_ignore_ascii_case(lang)
+    {
+        return true; // filtered out, keep going
+    }
+
+    let path_str = path_rewriter.rewrite(&raw_path);
+
+    for line_match in &file_match.lines {
+        let col = line_match
+            .ranges
+            .first()
+            .map(|(start, _)| start + 1)
+            .unwrap_or(1);
+
+        let line = color.format_search_line(
+            &path_str,
+            line_match.line_number,
+            col,
+            &line_match.content,
+            &line_match.ranges,
+        );
+
+        let resp = serde_json::to_string(&DaemonResponse::Line { content: line }).unwrap();
+        if tx.send(resp).is_err() {
+            return false; // receiver dropped, stop
+        }
+    }
+
+    true // keep going
 }
 
 /// Execute a Files request against the loaded index.
@@ -378,8 +398,6 @@ async fn handle_connection(
                 color,
                 cwd,
             } => {
-                // Capture staleness before the search so the flag reflects the
-                // snapshot state, not whether catch-up finished mid-search.
                 let stale = !caught_up.load(Ordering::Relaxed);
                 let path_rewriter = match cwd {
                     Some(ref cwd_str) => PathRewriter::new(repo_root, Path::new(cwd_str)),
@@ -392,46 +410,130 @@ async fn handle_connection(
                     ignore_case,
                     false,
                 );
-                let opts = SearchCmdOptions {
-                    pattern,
+
+                // Validate regex before starting the search.
+                if let MatchPattern::Regex(ref pat) = pattern
+                    && let Err(e) = regex::Regex::new(pat)
+                {
+                    let resp = serde_json::to_string(&DaemonResponse::Error {
+                        message: format!("invalid regex: {e}"),
+                    })
+                    .unwrap();
+                    writer
+                        .write_all(format!("{resp}\n").as_bytes())
+                        .await
+                        .map_err(IndexError::Io)?;
+                    line.clear();
+                    continue;
+                }
+
+                let color_config = ColorConfig::new(color);
+                let start = Instant::now();
+                let snapshot = manager.snapshot();
+                let search_opts = indexrs_core::search::SearchOptions {
                     context_lines,
-                    limit,
-                    language,
-                    path_glob,
-                    stats: false,
+                    max_results: Some(limit),
                 };
-                match handle_search_request(manager, &opts, color, &path_rewriter) {
-                    Ok((lines, elapsed)) => {
-                        for line in &lines {
-                            let resp = serde_json::to_string(&DaemonResponse::Line {
-                                content: line.clone(),
-                            })
-                            .unwrap();
-                            writer
-                                .write_all(format!("{resp}\n").as_bytes())
-                                .await
-                                .map_err(IndexError::Io)?;
+
+                let glob_matcher: Option<globset::GlobMatcher> = path_glob
+                    .as_ref()
+                    .and_then(|g| globset::Glob::new(g).ok().map(|g| g.compile_matcher()));
+
+                let (search_tx, search_rx) = std::sync::mpsc::channel();
+                let pattern_clone = pattern.clone();
+
+                // Spawn blocking search thread (same pattern as run_search_streaming).
+                let search_handle = tokio::task::spawn_blocking(move || {
+                    indexrs_core::multi_search::search_segments_streaming(
+                        &snapshot,
+                        &pattern_clone,
+                        &search_opts,
+                        search_tx,
+                    )
+                });
+
+                // Bridge: blocking mpsc -> tokio mpsc -> async socket writer.
+                let (async_tx, mut async_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+                let bridge_handle = tokio::task::spawn_blocking({
+                    let async_tx = async_tx.clone();
+                    let language_filter = language.clone();
+                    move || {
+                        for file_match in search_rx {
+                            if !format_and_send_file_match(
+                                &file_match,
+                                &color_config,
+                                &path_rewriter,
+                                &glob_matcher,
+                                &language_filter,
+                                &async_tx,
+                            ) {
+                                break; // receiver dropped
+                            }
                         }
-                        let resp = serde_json::to_string(&DaemonResponse::Done {
-                            total: lines.len(),
-                            duration_ms: elapsed.as_millis() as u64,
-                            stale,
+                    }
+                });
+
+                // Drop our copy of async_tx so the channel closes when bridge finishes.
+                drop(async_tx);
+
+                // Stream responses to the client as they arrive.
+                let mut total: usize = 0;
+                while let Some(resp_json) = async_rx.recv().await {
+                    total += 1;
+                    if writer
+                        .write_all(format!("{resp_json}\n").as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        break; // client disconnected
+                    }
+                }
+
+                // Wait for both tasks to finish.
+                let search_result = search_handle.await;
+                let _ = bridge_handle.await;
+
+                // Check for search errors (match the Reindex pattern).
+                match search_result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        let resp = serde_json::to_string(&DaemonResponse::Error {
+                            message: e.to_string(),
                         })
                         .unwrap();
                         writer
                             .write_all(format!("{resp}\n").as_bytes())
                             .await
                             .map_err(IndexError::Io)?;
+                        line.clear();
+                        continue;
                     }
-                    Err(msg) => {
-                        let resp =
-                            serde_json::to_string(&DaemonResponse::Error { message: msg }).unwrap();
+                    Err(e) => {
+                        let resp = serde_json::to_string(&DaemonResponse::Error {
+                            message: format!("search task panicked: {e}"),
+                        })
+                        .unwrap();
                         writer
                             .write_all(format!("{resp}\n").as_bytes())
                             .await
                             .map_err(IndexError::Io)?;
+                        line.clear();
+                        continue;
                     }
                 }
+
+                let elapsed = start.elapsed();
+                let resp = serde_json::to_string(&DaemonResponse::Done {
+                    total,
+                    duration_ms: elapsed.as_millis() as u64,
+                    stale,
+                })
+                .unwrap();
+                writer
+                    .write_all(format!("{resp}\n").as_bytes())
+                    .await
+                    .map_err(IndexError::Io)?;
             }
             DaemonRequest::Files {
                 language,
@@ -1347,6 +1449,114 @@ mod tests {
         reader.read_line(&mut response_line).await.unwrap();
         let resp: DaemonResponse = serde_json::from_str(response_line.trim()).unwrap();
         assert!(matches!(resp, DaemonResponse::Pong));
+
+        // Shutdown.
+        let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(2), daemon_handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_daemon_search_streams_results() {
+        use indexrs_core::segment::InputFile;
+
+        let dir = tempfile::tempdir().unwrap();
+        let indexrs_dir = dir.path().join(".indexrs");
+        std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        // Write source files to disk so background catch-up doesn't tombstone them.
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/main.rs"),
+            b"fn main() {\n    println!(\"hello world\");\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            b"pub fn greet() {\n    println!(\"hi there\");\n}\n",
+        )
+        .unwrap();
+
+        let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+        manager
+            .index_files(vec![
+                InputFile {
+                    path: "src/main.rs".to_string(),
+                    content: b"fn main() {\n    println!(\"hello world\");\n}\n".to_vec(),
+                    mtime: 100,
+                },
+                InputFile {
+                    path: "src/lib.rs".to_string(),
+                    content: b"pub fn greet() {\n    println!(\"hi there\");\n}\n".to_vec(),
+                    mtime: 200,
+                },
+            ])
+            .unwrap();
+        drop(manager);
+
+        let repo_root = dir.path().to_path_buf();
+        let repo_root_clone = repo_root.clone();
+
+        let daemon_handle = tokio::spawn(async move {
+            start_daemon(&repo_root_clone).await.unwrap();
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let stream = try_connect(&repo_root).await.expect("should connect");
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        let req = serde_json::to_string(&DaemonRequest::Search {
+            query: "println".to_string(),
+            regex: false,
+            case_sensitive: false,
+            ignore_case: true,
+            limit: 100,
+            context_lines: 0,
+            language: None,
+            path_glob: None,
+            color: false,
+            cwd: None,
+        })
+        .unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+
+        let mut lines = Vec::new();
+        let mut got_done = false;
+        loop {
+            let mut response_line = String::new();
+            reader.read_line(&mut response_line).await.unwrap();
+            let resp: DaemonResponse = serde_json::from_str(response_line.trim()).unwrap();
+            match resp {
+                DaemonResponse::Line { content } => {
+                    assert!(!got_done, "should not receive Line after Done");
+                    lines.push(content);
+                }
+                DaemonResponse::Done { total, .. } => {
+                    assert_eq!(total, lines.len());
+                    got_done = true;
+                    break;
+                }
+                other => panic!("unexpected response: {other:?}"),
+            }
+        }
+
+        assert!(got_done, "should receive Done");
+        assert!(
+            lines.len() >= 2,
+            "should have results from both files, got {}",
+            lines.len()
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("println")),
+            "results should contain 'println'"
+        );
 
         // Shutdown.
         let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
