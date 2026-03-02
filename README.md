@@ -22,40 +22,55 @@ The index is stored as immutable **segments** on disk. File changes are handled 
 
 ## Quick start
 
-Run the demo to index a directory and search it:
-
 ```bash
-cargo run -p indexrs-core --example demo -- <directory> <query>
+# Build from source
+cargo build --release --workspace
+
+# Index a repository (run from within the repo)
+indexrs init
+
+# Search for a substring
+indexrs search "fn main"
+
+# Search with the advanced query language
+indexrs search --query 'language:rust "fn main" NOT test'
+
+# List indexed files
+indexrs files
+
+# Show index status
+indexrs status
 ```
 
-Examples:
+## Search modes
+
+### Plain search (default)
+
+Without `--query`, the search argument is treated as a plain substring. Flags control matching behavior:
 
 ```bash
-# Search this repo for "Trigram"
-cargo run -p indexrs-core --example demo -- . "Trigram"
-
-# Search a specific directory for "fn main"
-cargo run -p indexrs-core --example demo -- ./indexrs-core/src "fn main"
-
-# Build a real on-disk index using the segment manager
-cargo run -p indexrs-core --example build_index --release -- <directory>
-
-# Estimate index disk space and peak RAM
-cargo run -p indexrs-core --example bench_space --release -- <directory>
+indexrs search "parseQuery"                  # Smart case (default): case-sensitive because of uppercase
+indexrs search "parsequery"                  # Smart case: case-insensitive (all lowercase)
+indexrs search -i "ParseQuery"              # Force case-insensitive
+indexrs search --case-sensitive "foo"        # Force case-sensitive
+indexrs search --regex 'fn\s+\w+'           # Regex mode
+indexrs search --language rust "struct"      # Filter by language
+indexrs search --path 'src/' "TODO"          # Filter by path
+indexrs search -C 3 "error"                 # Show 3 lines of context
+indexrs search -n 50 "import"               # Limit to 50 results
 ```
 
-## Query language
+### Query language (`--query`)
 
-The `--query` flag enables an advanced query language with boolean operators, filters, and pattern types. Without `--query`, the search argument is treated as a plain substring (or regex with `--regex`).
+The `--query` flag enables an advanced query language with boolean operators, filters, and pattern types inside a single expression.
 
 ```bash
-# Enable the query language
 indexrs search --query '<query expression>'
 ```
 
 `--query` is mutually exclusive with `--regex`, `--case-sensitive`, `--ignore-case`, `--smart-case`, `--language`, and `--path` — those features are expressed inside the query string instead.
 
-### Syntax
+### Query syntax
 
 | Feature | Syntax | Example |
 |---|---|---|
@@ -69,32 +84,49 @@ indexrs search --query '<query expression>'
 | Language filter | `language:name` or `lang:ext` | `language:rust`, `lang:py` |
 | Case-sensitive | `case:yes term` | `case:yes FooBar` |
 
-Operator precedence: NOT binds tightest, then AND (implicit), then OR. So `a b OR c d` parses as `(a AND b) OR (c AND d)`.
+**Operator precedence:** NOT binds tightest, then AND (implicit), then OR. So `a b OR c d` parses as `(a AND b) OR (c AND d)`.
 
-### Examples
+**Defaults:** Literals and phrases are case-insensitive. Regex patterns are case-sensitive. `case:yes` applies only to the immediately following term.
+
+### Query examples
 
 ```bash
-# Find files containing both "Result" and "Error"
+# Files containing both "Result" and "Error"
 indexrs search --query 'Result Error'
 
-# Find println or eprintln in Rust files
+# Either println or eprintln in Rust files
 indexrs search --query 'language:rust println OR eprintln'
 
-# Regex for function definitions, excluding tests
+# Regex for function definitions, excluding test files
 indexrs search --query '/fn\s+\w+/ NOT test'
 
 # Exact phrase in files under src/
 indexrs search --query 'path:src/ "fn main"'
 
-# Case-sensitive match
+# Case-sensitive match for a specific identifier
 indexrs search --query 'case:yes ParseError'
+
+# Combine path and language filters
+indexrs search --query 'path:src/ lang:rs "pub fn"'
+
+# Find TODO or FIXME comments in Python files
+indexrs search --query 'language:python TODO OR FIXME'
+
+# Regex for import statements, excluding vendor directories
+indexrs search --query '/^import\s/ NOT path:vendor/'
+
+# Match a struct definition but not its usage in tests
+indexrs search --query '"pub struct" NOT path:tests/'
+
+# Multiple exclusions
+indexrs search --query 'language:rust async NOT test NOT example'
 ```
 
 ### Supported languages
 
-`rust`, `python`, `typescript`, `javascript`, `go`, `c`, `cpp`, `java`, `ruby`, `shell`, `markdown`, `yaml`, `toml`, `json`, `xml`, `html`, `css`, `scss`, `sass`, `sql`, `protobuf`, `dockerfile`, `hcl`, `kotlin`, `swift`, `scala`, `elixir`, `erlang`, `haskell`, `ocaml`, `lua`, `perl`, `r`, `dart`, `zig`, `nix`
+Both full names and common extensions work (`language:rust` and `lang:rs` are equivalent):
 
-Both full names and common extensions work: `language:rust` and `lang:rs` are equivalent.
+`rust`, `python`, `typescript`, `javascript`, `go`, `c`, `cpp`, `java`, `ruby`, `shell`, `markdown`, `yaml`, `toml`, `json`, `xml`, `html`, `css`, `scss`, `sass`, `sql`, `protobuf`, `dockerfile`, `hcl`, `kotlin`, `swift`, `scala`, `elixir`, `erlang`, `haskell`, `ocaml`, `lua`, `perl`, `r`, `dart`, `zig`, `nix`
 
 ## Building
 
@@ -112,13 +144,24 @@ cargo clippy --workspace -- -D warnings   # Lint
 cargo fmt --all -- --check                # Format check
 ```
 
+## CLI commands
+
+| Command | Description |
+|---|---|
+| `indexrs init` | Build the index for the current repository |
+| `indexrs search <query>` | Search code (plain substring, regex, or query language) |
+| `indexrs files` | List indexed files with optional language/path filters |
+| `indexrs status` | Show index stats (segment count, file count) |
+| `indexrs reindex` | Incremental reindex (`--full` for complete rebuild) |
+| `indexrs preview <file>` | Preview file contents with syntax highlighting |
+
 ## Workspace crates
 
 | Crate | Description |
 |---|---|
-| `indexrs-core` | Library with all indexing, search, and change detection logic |
-| `indexrs-cli` | CLI binary with subcommands: `search`, `files`, `symbols`, `preview`, `status`, `reindex` |
-| `indexrs-mcp` | MCP server for IDE integration |
+| `indexrs-core` | Library with all indexing, search, query parsing, and change detection logic |
+| `indexrs-cli` | CLI binary with daemon-backed search, file listing, and index management |
+| `indexrs-mcp` | MCP server for IDE integration (stub) |
 
 ## Architecture
 
