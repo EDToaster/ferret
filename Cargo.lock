@@ -555,6 +555,7 @@ dependencies = [
  "clap",
  "glob",
  "indexrs-core",
+ "indexrs-daemon",
  "rmcp",
  "schemars",
  "serde",
