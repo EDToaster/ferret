@@ -170,6 +170,16 @@ pub enum Command {
         full: bool,
     },
 
+    /// Estimate index size and peak RAM for a directory (without building)
+    Estimate {
+        /// Directory to analyze (default: current repo root)
+        directory: Option<PathBuf>,
+
+        /// Per-segment content budget in MB (default: 256)
+        #[arg(long, default_value_t = 256)]
+        segment_budget_mb: u64,
+    },
+
     /// Internal: run as daemon process (hidden from help)
     #[command(name = "daemon-start", hide = true)]
     DaemonStart,

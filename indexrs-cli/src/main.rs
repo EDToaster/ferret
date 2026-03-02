@@ -234,6 +234,10 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
             }
             Ok(ExitCode::Success)
         }
+        Command::Estimate { .. } => {
+            eprintln!("estimate: not yet implemented");
+            Ok(ExitCode::Error)
+        }
         Command::Init { force } => {
             let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
             init::run_init(&repo_root, force)?;
