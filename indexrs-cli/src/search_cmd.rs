@@ -4,7 +4,7 @@ use globset::{Glob, GlobMatcher};
 use indexrs_core::error::IndexError;
 use indexrs_core::index_state::SegmentList;
 use indexrs_core::multi_search::{
-    search_segments_streaming, search_segments_with_pattern_and_options, search_segments_with_query,
+    search_segments_with_pattern_and_options, search_segments_with_query,
 };
 use indexrs_core::query::{LiteralQuery, Query, RegexQuery, match_language, parse_query};
 use indexrs_core::search::{MatchPattern, SearchOptions};
@@ -191,12 +191,17 @@ pub fn run_search_streaming<W: std::io::Write>(
         .map_err(|e| IndexError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?;
 
     let (tx, rx) = std::sync::mpsc::channel();
-    let pattern = opts.pattern.clone();
+    let query = flags_to_query(&opts.pattern, opts.language.as_deref())?;
 
     // Run the search on a background thread so we can consume results on this thread
     let snapshot_clone = Arc::clone(snapshot);
     let search_handle = std::thread::spawn(move || {
-        search_segments_streaming(&snapshot_clone, &pattern, &search_opts, tx)
+        indexrs_core::multi_search::search_segments_with_query_streaming(
+            &snapshot_clone,
+            &query,
+            &search_opts,
+            tx,
+        )
     });
 
     let mut has_results = false;
@@ -206,13 +211,6 @@ pub fn run_search_streaming<W: std::io::Write>(
         // Path filter (use raw repo-relative path for glob matching)
         if let Some(ref matcher) = glob_matcher
             && !matcher.is_match(raw_path.as_ref())
-        {
-            continue;
-        }
-
-        // Language filter
-        if let Some(ref lang) = opts.language
-            && !file_match.language.to_string().eq_ignore_ascii_case(lang)
         {
             continue;
         }
