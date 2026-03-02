@@ -24,6 +24,9 @@ const TAG_PROGRESS: u8 = 0x05;
 
 const DONE_PAYLOAD_LEN: u32 = 17;
 
+/// Reject string payloads larger than 64 MB (protects against corrupted frames).
+const MAX_STRING_PAYLOAD: u32 = 64 * 1024 * 1024;
+
 /// Write a string-payload frame: `[tag][len: u32 LE][utf8 bytes]`.
 async fn write_string_frame<W: AsyncWriteExt + Unpin>(
     writer: &mut W,
@@ -31,15 +34,21 @@ async fn write_string_frame<W: AsyncWriteExt + Unpin>(
     s: &str,
 ) -> io::Result<()> {
     let payload = s.as_bytes();
-    let len = payload.len() as u32;
-    writer.write_u8(tag).await?;
-    writer.write_all(&len.to_le_bytes()).await?;
-    writer.write_all(payload).await?;
-    Ok(())
+    let mut header = [0u8; 5];
+    header[0] = tag;
+    header[1..5].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+    writer.write_all(&header).await?;
+    writer.write_all(payload).await
 }
 
 /// Read `len` bytes from the reader and convert to a UTF-8 string.
 async fn read_utf8<R: AsyncReadExt + Unpin>(reader: &mut R, len: u32) -> io::Result<String> {
+    if len > MAX_STRING_PAYLOAD {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("string payload too large: {len} bytes"),
+        ));
+    }
     let mut buf = vec![0u8; len as usize];
     reader.read_exact(&mut buf).await?;
     String::from_utf8(buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
@@ -104,7 +113,15 @@ pub async fn read_response<R: AsyncReadExt + Unpin>(reader: &mut R) -> io::Resul
             let message = read_utf8(reader, len).await?;
             Ok(DaemonResponse::Error { message })
         }
-        TAG_PONG => Ok(DaemonResponse::Pong),
+        TAG_PONG => {
+            if len != 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Pong payload must be 0 bytes, got {len}"),
+                ));
+            }
+            Ok(DaemonResponse::Pong)
+        }
         TAG_PROGRESS => {
             let message = read_utf8(reader, len).await?;
             Ok(DaemonResponse::Progress { message })
@@ -280,6 +297,14 @@ mod tests {
         assert_eq!(buf[21], 0x00);
         // Total frame size: 5 header + 17 payload = 22
         assert_eq!(buf.len(), 22);
+    }
+
+    #[tokio::test]
+    async fn test_pong_nonzero_len_returns_error() {
+        let buf: Vec<u8> = vec![TAG_PONG, 0x05, 0x00, 0x00, 0x00, 0, 0, 0, 0, 0];
+        let mut cursor = Cursor::new(buf);
+        let err = read_response(&mut cursor).await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
     #[tokio::test]
