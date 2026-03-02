@@ -93,22 +93,31 @@ pub struct SearchCodeParams {
 #[allow(dead_code)]
 pub struct SearchFilesParams {
     /// File name or path pattern. Supports glob patterns and substring matching.
+    #[schemars(
+        description = "File name or path pattern to search for. Supports glob patterns (*.rs, src/**/*.ts) and substring matching."
+    )]
     pub query: String,
 
     /// Filter by programming language (e.g. "rust", "python", "typescript").
     #[serde(default)]
+    #[schemars(
+        description = "Filter by programming language. Examples: 'rust', 'python', 'typescript'."
+    )]
     pub language: Option<String>,
 
     /// Filter to a specific indexed repository.
     #[serde(default)]
+    #[schemars(description = "Filter to a specific indexed repository by name or path.")]
     pub repo: Option<String>,
 
     /// Maximum number of files to return. Default: 30. Max: 200.
     #[serde(default)]
+    #[schemars(description = "Maximum number of files to return. Default: 30. Max: 200.")]
     pub max_results: Option<usize>,
 
     /// Skip this many results for pagination. Default: 0.
     #[serde(default)]
+    #[schemars(description = "Skip this many results for pagination. Default: 0.")]
     pub offset: Option<usize>,
 }
 
