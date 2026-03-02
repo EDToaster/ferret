@@ -4,8 +4,9 @@ use globset::{Glob, GlobMatcher};
 use indexrs_core::error::IndexError;
 use indexrs_core::index_state::SegmentList;
 use indexrs_core::multi_search::{
-    search_segments_streaming, search_segments_with_pattern_and_options,
+    search_segments_streaming, search_segments_with_pattern_and_options, search_segments_with_query,
 };
+use indexrs_core::query::parse_query;
 use indexrs_core::search::{MatchPattern, SearchOptions};
 
 use crate::color::ColorConfig;
@@ -227,6 +228,60 @@ pub fn run_search_streaming<W: std::io::Write>(
     } else {
         ExitCode::NoResults
     })
+}
+
+/// Run a search using the advanced query language.
+///
+/// Parses the query string into a Query AST, executes it through the full
+/// query engine pipeline (trigram extraction -> candidate filtering ->
+/// boolean verification), and outputs results in vimgrep format.
+pub fn run_query_search<W: std::io::Write>(
+    snapshot: &SegmentList,
+    query_str: &str,
+    context_lines: usize,
+    limit: usize,
+    color: &ColorConfig,
+    path_rewriter: &PathRewriter,
+    writer: &mut StreamingWriter<W>,
+) -> Result<ExitCode, IndexError> {
+    let query = parse_query(query_str)?;
+    let opts = SearchOptions {
+        context_lines,
+        max_results: Some(limit),
+    };
+    let result = search_segments_with_query(snapshot, &query, &opts)?;
+
+    if result.files.is_empty() {
+        return Ok(ExitCode::NoResults);
+    }
+
+    for file_match in &result.files {
+        let raw_path = file_match.path.to_string_lossy();
+        let path_str = path_rewriter.rewrite(&raw_path);
+
+        for line_match in &file_match.lines {
+            let col = line_match
+                .ranges
+                .first()
+                .map(|(start, _)| start + 1)
+                .unwrap_or(1);
+
+            let line = color.format_search_line(
+                &path_str,
+                line_match.line_number,
+                col,
+                &line_match.content,
+                &line_match.ranges,
+            );
+
+            if writer.write_line(&line).is_err() {
+                break;
+            }
+        }
+    }
+    let _ = writer.finish();
+
+    Ok(ExitCode::Success)
 }
 
 #[cfg(test)]

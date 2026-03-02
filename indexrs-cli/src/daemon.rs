@@ -46,6 +46,13 @@ pub enum DaemonRequest {
         color: bool,
         cwd: Option<String>,
     },
+    QuerySearch {
+        query: String,
+        limit: usize,
+        context_lines: usize,
+        color: bool,
+        cwd: Option<String>,
+    },
     Files {
         language: Option<String>,
         path_glob: Option<String>,
@@ -299,6 +306,43 @@ fn format_and_send_file_match(
     true // keep going
 }
 
+/// Execute a query-language search against the loaded index.
+fn handle_query_search_request(
+    manager: &SegmentManager,
+    query_str: &str,
+    limit: usize,
+    context_lines: usize,
+    color: bool,
+    path_rewriter: &PathRewriter,
+) -> Result<(Vec<String>, Duration), String> {
+    let start = Instant::now();
+    let snapshot = manager.snapshot();
+    let color = ColorConfig::new(color);
+
+    let mut buf = Vec::new();
+    {
+        let mut writer = StreamingWriter::new(&mut buf);
+        search_cmd::run_query_search(
+            &snapshot,
+            query_str,
+            context_lines,
+            limit,
+            &color,
+            path_rewriter,
+            &mut writer,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let output = String::from_utf8_lossy(&buf);
+    let lines: Vec<String> = output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect();
+    Ok((lines, start.elapsed()))
+}
+
 /// Execute a Files request against the loaded index.
 fn handle_files_request(
     manager: &SegmentManager,
@@ -534,6 +578,58 @@ async fn handle_connection(
                     .write_all(format!("{resp}\n").as_bytes())
                     .await
                     .map_err(IndexError::Io)?;
+            }
+            DaemonRequest::QuerySearch {
+                query,
+                limit,
+                context_lines,
+                color,
+                cwd,
+            } => {
+                let stale = !caught_up.load(Ordering::Relaxed);
+                let path_rewriter = match cwd {
+                    Some(ref cwd_str) => PathRewriter::new(repo_root, Path::new(cwd_str)),
+                    None => PathRewriter::identity(),
+                };
+                match handle_query_search_request(
+                    manager,
+                    &query,
+                    limit,
+                    context_lines,
+                    color,
+                    &path_rewriter,
+                ) {
+                    Ok((lines, elapsed)) => {
+                        for line in &lines {
+                            let resp = serde_json::to_string(&DaemonResponse::Line {
+                                content: line.clone(),
+                            })
+                            .unwrap();
+                            writer
+                                .write_all(format!("{resp}\n").as_bytes())
+                                .await
+                                .map_err(IndexError::Io)?;
+                        }
+                        let resp = serde_json::to_string(&DaemonResponse::Done {
+                            total: lines.len(),
+                            duration_ms: elapsed.as_millis() as u64,
+                            stale,
+                        })
+                        .unwrap();
+                        writer
+                            .write_all(format!("{resp}\n").as_bytes())
+                            .await
+                            .map_err(IndexError::Io)?;
+                    }
+                    Err(msg) => {
+                        let resp =
+                            serde_json::to_string(&DaemonResponse::Error { message: msg }).unwrap();
+                        writer
+                            .write_all(format!("{resp}\n").as_bytes())
+                            .await
+                            .map_err(IndexError::Io)?;
+                    }
+                }
             }
             DaemonRequest::Files {
                 language,
