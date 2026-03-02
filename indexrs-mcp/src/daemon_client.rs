@@ -53,7 +53,8 @@ impl DaemonClient {
     pub async fn request(&self, req: DaemonRequest) -> Result<DaemonResult, String> {
         match self.request_inner(&req).await {
             Ok(result) => Ok(result),
-            Err(_first_err) => {
+            Err(first_err) => {
+                tracing::warn!("daemon request failed, retrying: {first_err}");
                 // Clear stale connection and retry once.
                 {
                     let mut guard = self.conn.lock().await;
@@ -110,7 +111,7 @@ impl DaemonClient {
                     lines.push(content);
                 }
                 DaemonResponse::Progress { message } => {
-                    lines.push(message);
+                    tracing::info!("daemon: {message}");
                 }
                 DaemonResponse::Done {
                     total,

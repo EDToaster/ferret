@@ -566,16 +566,9 @@ impl IndexrsServer {
         &self,
         #[tool(aggr)] params: ReindexParams,
     ) -> Result<CallToolResult, rmcp::Error> {
-        let full = params.full.unwrap_or(false);
-        let mode = if full { "full" } else { "incremental" };
-
-        let repo_label = params.repo.as_deref().unwrap_or("default repository");
-
         // Dispatch through daemon if available
         if let Some(daemon) = &self.daemon {
-            let req = indexrs_daemon::DaemonRequest::Reindex;
-
-            match daemon.request(req).await {
+            match daemon.request(indexrs_daemon::DaemonRequest::Reindex).await {
                 Ok(result) => {
                     return Ok(CallToolResult::success(vec![Content::text(result.text)]));
                 }
@@ -588,6 +581,9 @@ impl IndexrsServer {
         }
 
         // Fallback: no daemon available, return informative message.
+        let full = params.full.unwrap_or(false);
+        let mode = if full { "full" } else { "incremental" };
+        let repo_label = params.repo.as_deref().unwrap_or("default repository");
         let output = format!(
             "Reindex requested for {repo_label} ({mode})\n\
              \n\
