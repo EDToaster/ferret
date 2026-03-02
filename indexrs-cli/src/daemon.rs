@@ -853,16 +853,25 @@ pub async fn run_via_daemon<W: std::io::Write>(
         .await
         .map_err(IndexError::Io)?;
 
-    // Read responses.
-    let mut line = String::new();
-    while reader.read_line(&mut line).await.map_err(IndexError::Io)? > 0 {
-        let resp: DaemonResponse = serde_json::from_str(line.trim())
-            .map_err(|e| IndexError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+    // Read responses (TLV binary frames).
+    loop {
+        let resp = match wire::read_response(&mut reader).await {
+            Ok(resp) => resp,
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return Err(IndexError::Io(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "daemon disconnected without sending Done",
+                )));
+            }
+            Err(e) => return Err(IndexError::Io(e)),
+        };
 
         match resp {
             DaemonResponse::Line { content } => {
                 if writer.write_line(&content).is_err() {
-                    break; // SIGPIPE — exit silently
+                    // SIGPIPE — exit silently with whatever we have.
+                    let _ = writer.finish();
+                    return Ok(ExitCode::Success);
                 }
             }
             DaemonResponse::Done { total, stale, .. } => {
@@ -884,15 +893,7 @@ pub async fn run_via_daemon<W: std::io::Write>(
             }
             DaemonResponse::Pong => {}
         }
-
-        line.clear();
     }
-
-    // Unexpected disconnect.
-    Err(IndexError::Io(std::io::Error::new(
-        std::io::ErrorKind::UnexpectedEof,
-        "daemon disconnected without sending Done",
-    )))
 }
 
 #[cfg(test)]
