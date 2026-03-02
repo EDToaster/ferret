@@ -261,7 +261,6 @@ fn format_and_send_file_match(
     color: &ColorConfig,
     path_rewriter: &PathRewriter,
     glob_matcher: &Option<globset::GlobMatcher>,
-    language_filter: &Option<String>,
     tx: &tokio::sync::mpsc::UnboundedSender<String>,
 ) -> bool {
     let raw_path = file_match.path.to_string_lossy();
@@ -269,13 +268,6 @@ fn format_and_send_file_match(
     // Path filter
     if let Some(matcher) = glob_matcher
         && !matcher.is_match(raw_path.as_ref())
-    {
-        return true; // filtered out, keep going
-    }
-
-    // Language filter
-    if let Some(lang) = language_filter
-        && !file_match.language.to_string().eq_ignore_ascii_case(lang)
     {
         return true; // filtered out, keep going
     }
@@ -307,6 +299,7 @@ fn format_and_send_file_match(
 }
 
 /// Execute a query-language search against the loaded index.
+#[allow(dead_code)]
 fn handle_query_search_request(
     manager: &SegmentManager,
     query_str: &str,
@@ -471,6 +464,22 @@ async fn handle_connection(
                     continue;
                 }
 
+                let query = match search_cmd::flags_to_query(&pattern, language.as_deref()) {
+                    Ok(q) => q,
+                    Err(e) => {
+                        let resp = serde_json::to_string(&DaemonResponse::Error {
+                            message: e.to_string(),
+                        })
+                        .unwrap();
+                        writer
+                            .write_all(format!("{resp}\n").as_bytes())
+                            .await
+                            .map_err(IndexError::Io)?;
+                        line.clear();
+                        continue;
+                    }
+                };
+
                 let color_config = ColorConfig::new(color);
                 let start = Instant::now();
                 let snapshot = manager.snapshot();
@@ -484,13 +493,12 @@ async fn handle_connection(
                     .and_then(|g| globset::Glob::new(g).ok().map(|g| g.compile_matcher()));
 
                 let (search_tx, search_rx) = std::sync::mpsc::channel();
-                let pattern_clone = pattern.clone();
 
-                // Spawn blocking search thread (same pattern as run_search_streaming).
+                // Spawn blocking search thread using query-based streaming.
                 let search_handle = tokio::task::spawn_blocking(move || {
-                    indexrs_core::multi_search::search_segments_streaming(
+                    indexrs_core::multi_search::search_segments_with_query_streaming(
                         &snapshot,
-                        &pattern_clone,
+                        &query,
                         &search_opts,
                         search_tx,
                     )
@@ -501,7 +509,6 @@ async fn handle_connection(
 
                 let bridge_handle = tokio::task::spawn_blocking({
                     let async_tx = async_tx.clone();
-                    let language_filter = language.clone();
                     move || {
                         for file_match in search_rx {
                             if !format_and_send_file_match(
@@ -509,7 +516,6 @@ async fn handle_connection(
                                 &color_config,
                                 &path_rewriter,
                                 &glob_matcher,
-                                &language_filter,
                                 &async_tx,
                             ) {
                                 break; // receiver dropped
@@ -591,45 +597,89 @@ async fn handle_connection(
                     Some(ref cwd_str) => PathRewriter::new(repo_root, Path::new(cwd_str)),
                     None => PathRewriter::identity(),
                 };
-                match handle_query_search_request(
-                    manager,
-                    &query,
-                    limit,
-                    context_lines,
-                    color,
-                    &path_rewriter,
-                ) {
-                    Ok((lines, elapsed)) => {
-                        for line in &lines {
-                            let resp = serde_json::to_string(&DaemonResponse::Line {
-                                content: line.clone(),
-                            })
-                            .unwrap();
-                            writer
-                                .write_all(format!("{resp}\n").as_bytes())
-                                .await
-                                .map_err(IndexError::Io)?;
-                        }
-                        let resp = serde_json::to_string(&DaemonResponse::Done {
-                            total: lines.len(),
-                            duration_ms: elapsed.as_millis() as u64,
-                            stale,
+
+                let parsed_query = match indexrs_core::query::parse_query(&query) {
+                    Ok(q) => q,
+                    Err(e) => {
+                        let resp = serde_json::to_string(&DaemonResponse::Error {
+                            message: e.to_string(),
                         })
                         .unwrap();
                         writer
                             .write_all(format!("{resp}\n").as_bytes())
                             .await
                             .map_err(IndexError::Io)?;
+                        line.clear();
+                        continue;
                     }
-                    Err(msg) => {
-                        let resp =
-                            serde_json::to_string(&DaemonResponse::Error { message: msg }).unwrap();
-                        writer
-                            .write_all(format!("{resp}\n").as_bytes())
-                            .await
-                            .map_err(IndexError::Io)?;
+                };
+
+                let color_config = ColorConfig::new(color);
+                let start = Instant::now();
+                let snapshot = manager.snapshot();
+                let search_opts = indexrs_core::search::SearchOptions {
+                    context_lines,
+                    max_results: Some(limit),
+                };
+
+                let (search_tx, search_rx) = std::sync::mpsc::channel();
+                let search_handle = tokio::task::spawn_blocking(move || {
+                    indexrs_core::multi_search::search_segments_with_query_streaming(
+                        &snapshot,
+                        &parsed_query,
+                        &search_opts,
+                        search_tx,
+                    )
+                });
+
+                // Bridge: blocking mpsc -> tokio mpsc -> async socket writer
+                let (async_tx, mut async_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+                let bridge_handle = tokio::task::spawn_blocking({
+                    let async_tx = async_tx.clone();
+                    move || {
+                        for file_match in search_rx {
+                            if !format_and_send_file_match(
+                                &file_match,
+                                &color_config,
+                                &path_rewriter,
+                                &None,
+                                &async_tx,
+                            ) {
+                                break;
+                            }
+                        }
+                    }
+                });
+
+                drop(async_tx);
+
+                let mut total: usize = 0;
+                while let Some(resp_json) = async_rx.recv().await {
+                    total += 1;
+                    if writer
+                        .write_all(format!("{resp_json}\n").as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        break;
                     }
                 }
+
+                let _ = search_handle.await;
+                let _ = bridge_handle.await;
+
+                let elapsed = start.elapsed();
+                let resp = serde_json::to_string(&DaemonResponse::Done {
+                    total,
+                    duration_ms: elapsed.as_millis() as u64,
+                    stale,
+                })
+                .unwrap();
+                writer
+                    .write_all(format!("{resp}\n").as_bytes())
+                    .await
+                    .map_err(IndexError::Io)?;
             }
             DaemonRequest::Files {
                 language,

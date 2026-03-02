@@ -55,10 +55,10 @@ pub use metadata::{FileMetadata, MetadataBuilder, MetadataReader};
 pub use multi_search::{
     search_segments, search_segments_streaming, search_segments_with_options,
     search_segments_with_pattern, search_segments_with_pattern_and_options,
-    search_segments_with_query,
+    search_segments_with_query, search_segments_with_query_streaming,
 };
 pub use posting::PostingListBuilder;
-pub use query::{LiteralQuery, PhraseQuery, Query, RegexQuery, parse_query};
+pub use query::{LiteralQuery, PhraseQuery, Query, RegexQuery, match_language, parse_query};
 pub use query_match::QueryMatcher;
 pub use query_plan::{
     PreFilter, QueryInput, QueryPlan, ScoredTrigram, VerifyStep, plan_literal_query, plan_query,

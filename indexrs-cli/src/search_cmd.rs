@@ -3,10 +3,8 @@ use std::sync::Arc;
 use globset::{Glob, GlobMatcher};
 use indexrs_core::error::IndexError;
 use indexrs_core::index_state::SegmentList;
-use indexrs_core::multi_search::{
-    search_segments_streaming, search_segments_with_pattern_and_options, search_segments_with_query,
-};
-use indexrs_core::query::parse_query;
+use indexrs_core::multi_search::search_segments_with_pattern_and_options;
+use indexrs_core::query::{LiteralQuery, Query, RegexQuery, match_language, parse_query};
 use indexrs_core::search::{MatchPattern, SearchOptions};
 
 use crate::color::ColorConfig;
@@ -51,6 +49,37 @@ pub fn resolve_match_pattern(
     } else {
         MatchPattern::LiteralCaseInsensitive(query.to_string())
     }
+}
+
+/// Convert CLI flags (pattern + optional language) into a Query AST.
+///
+/// Maps MatchPattern variants to Query leaf nodes. If a language filter is
+/// provided, wraps the content query in an AND with LanguageFilter.
+///
+/// Path glob is NOT included here — Query::PathFilter is prefix-based,
+/// but --path supports globs. Path glob filtering stays post-hoc in CLI.
+pub fn flags_to_query(pattern: &MatchPattern, language: Option<&str>) -> Result<Query, IndexError> {
+    let content_query = match pattern {
+        MatchPattern::Literal(s) => Query::Literal(LiteralQuery {
+            text: s.clone(),
+            case_sensitive: true,
+        }),
+        MatchPattern::LiteralCaseInsensitive(s) => Query::Literal(LiteralQuery {
+            text: s.clone(),
+            case_sensitive: false,
+        }),
+        MatchPattern::Regex(s) => Query::Regex(RegexQuery {
+            pattern: s.clone(),
+            case_sensitive: true,
+        }),
+    };
+
+    let Some(lang_str) = language else {
+        return Ok(content_query);
+    };
+
+    let lang = match_language(lang_str)?;
+    Ok(Query::And(vec![Query::LanguageFilter(lang), content_query]))
 }
 
 /// Run the search command: search segments, format as vimgrep, stream to output.
@@ -160,12 +189,17 @@ pub fn run_search_streaming<W: std::io::Write>(
         .map_err(|e| IndexError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?;
 
     let (tx, rx) = std::sync::mpsc::channel();
-    let pattern = opts.pattern.clone();
+    let query = flags_to_query(&opts.pattern, opts.language.as_deref())?;
 
     // Run the search on a background thread so we can consume results on this thread
     let snapshot_clone = Arc::clone(snapshot);
     let search_handle = std::thread::spawn(move || {
-        search_segments_streaming(&snapshot_clone, &pattern, &search_opts, tx)
+        indexrs_core::multi_search::search_segments_with_query_streaming(
+            &snapshot_clone,
+            &query,
+            &search_opts,
+            tx,
+        )
     });
 
     let mut has_results = false;
@@ -175,13 +209,6 @@ pub fn run_search_streaming<W: std::io::Write>(
         // Path filter (use raw repo-relative path for glob matching)
         if let Some(ref matcher) = glob_matcher
             && !matcher.is_match(raw_path.as_ref())
-        {
-            continue;
-        }
-
-        // Language filter
-        if let Some(ref lang) = opts.language
-            && !file_match.language.to_string().eq_ignore_ascii_case(lang)
         {
             continue;
         }
@@ -234,7 +261,7 @@ pub fn run_search_streaming<W: std::io::Write>(
 ///
 /// Parses the query string into a Query AST, executes it through the full
 /// query engine pipeline (trigram extraction -> candidate filtering ->
-/// boolean verification), and outputs results in vimgrep format.
+/// boolean verification), and streams results in vimgrep format.
 pub fn run_query_search<W: std::io::Write>(
     snapshot: &SegmentList,
     query_str: &str,
@@ -245,17 +272,25 @@ pub fn run_query_search<W: std::io::Write>(
     writer: &mut StreamingWriter<W>,
 ) -> Result<ExitCode, IndexError> {
     let query = parse_query(query_str)?;
-    let opts = SearchOptions {
+    let search_opts = SearchOptions {
         context_lines,
         max_results: Some(limit),
     };
-    let result = search_segments_with_query(snapshot, &query, &opts)?;
 
-    if result.files.is_empty() {
-        return Ok(ExitCode::NoResults);
-    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let snapshot_clone = Arc::clone(snapshot);
+    let search_handle = std::thread::spawn(move || {
+        indexrs_core::multi_search::search_segments_with_query_streaming(
+            &snapshot_clone,
+            &query,
+            &search_opts,
+            tx,
+        )
+    });
 
-    for file_match in &result.files {
+    let mut has_results = false;
+    for file_match in rx {
+        has_results = true;
         let raw_path = file_match.path.to_string_lossy();
         let path_str = path_rewriter.rewrite(&raw_path);
 
@@ -281,7 +316,21 @@ pub fn run_query_search<W: std::io::Write>(
     }
     let _ = writer.finish();
 
-    Ok(ExitCode::Success)
+    match search_handle.join() {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(_) => {
+            return Err(IndexError::Io(std::io::Error::other(
+                "search thread panicked",
+            )));
+        }
+    }
+
+    Ok(if has_results {
+        ExitCode::Success
+    } else {
+        ExitCode::NoResults
+    })
 }
 
 #[cfg(test)]
@@ -514,5 +563,62 @@ mod tests {
             "path should not have src/ prefix"
         );
         assert!(matches!(exit, ExitCode::Success));
+    }
+
+    #[test]
+    fn test_flags_to_query_case_insensitive() {
+        let pattern = MatchPattern::LiteralCaseInsensitive("hello".to_string());
+        let query = flags_to_query(&pattern, None).unwrap();
+        assert_eq!(
+            query,
+            Query::Literal(LiteralQuery {
+                text: "hello".to_string(),
+                case_sensitive: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_flags_to_query_case_sensitive() {
+        let pattern = MatchPattern::Literal("Hello".to_string());
+        let query = flags_to_query(&pattern, None).unwrap();
+        assert_eq!(
+            query,
+            Query::Literal(LiteralQuery {
+                text: "Hello".to_string(),
+                case_sensitive: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_flags_to_query_regex() {
+        let pattern = MatchPattern::Regex("fn\\s+".to_string());
+        let query = flags_to_query(&pattern, None).unwrap();
+        assert_eq!(
+            query,
+            Query::Regex(RegexQuery {
+                pattern: "fn\\s+".to_string(),
+                case_sensitive: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_flags_to_query_with_language() {
+        let pattern = MatchPattern::LiteralCaseInsensitive("println".to_string());
+        let query = flags_to_query(&pattern, Some("rust")).unwrap();
+        if let Query::And(children) = &query {
+            assert_eq!(children.len(), 2);
+            assert!(matches!(children[0], Query::LanguageFilter(_)));
+        } else {
+            panic!("expected And, got {query:?}");
+        }
+    }
+
+    #[test]
+    fn test_flags_to_query_unknown_language() {
+        let pattern = MatchPattern::LiteralCaseInsensitive("hello".to_string());
+        assert!(flags_to_query(&pattern, Some("brainfuck")).is_err());
     }
 }

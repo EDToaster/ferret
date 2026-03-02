@@ -1148,6 +1148,69 @@ pub fn search_segments_with_query(
     })
 }
 
+/// Streaming variant of [`search_segments_with_query()`].
+///
+/// Sends `FileMatch` results through `sender` as they are found, processing
+/// segments newest-first for dedup correctness. This enables incremental output
+/// (critical for fzf integration) while using the full Query AST pipeline.
+///
+/// Trade-offs vs the batch variant:
+/// - Results arrive in segment order (newest first), not sorted by relevance score
+/// - Dedup uses HashSet (like `search_segments_streaming`) instead of HashMap merge
+/// - Within each segment, candidate verification is still parallelized via rayon
+pub fn search_segments_with_query_streaming(
+    snapshot: &SegmentList,
+    query: &Query,
+    options: &SearchOptions,
+    sender: mpsc::Sender<FileMatch>,
+) -> Result<(), IndexError> {
+    if snapshot.is_empty() {
+        return Ok(());
+    }
+
+    let tq = extract_query_trigrams(query);
+    let (languages, path_prefixes) = extract_pre_filters(query);
+
+    let mut sent_paths: HashSet<PathBuf> = HashSet::new();
+    let mut sent_count: usize = 0;
+
+    // Process segments in reverse order (newest first) for dedup correctness
+    for segment in snapshot.iter().rev() {
+        let tombstones = segment.load_tombstones()?;
+        let file_matches = search_single_segment_with_query(
+            segment,
+            query,
+            &tq,
+            &languages,
+            &path_prefixes,
+            &tombstones,
+            options.context_lines,
+            None, // no per-segment limit; limit globally via sent_count
+        )?;
+
+        for fm in file_matches {
+            if sent_paths.contains(&fm.path) {
+                continue;
+            }
+
+            sent_paths.insert(fm.path.clone());
+
+            if sender.send(fm).is_err() {
+                return Ok(()); // receiver dropped, stop searching
+            }
+
+            sent_count += 1;
+            if let Some(max) = options.max_results
+                && sent_count >= max
+            {
+                return Ok(());
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Search a single segment using a Query AST.
 ///
 /// Looks up trigram candidates, applies pre-filters, and verifies content
@@ -2705,5 +2768,189 @@ mod tests {
 
         assert_eq!(result.total_file_count, 1);
         assert_eq!(result.files[0].path, PathBuf::from("main.rs"));
+    }
+
+    // ---- Streaming query search tests ----
+
+    #[test]
+    fn test_search_with_query_streaming_literal() {
+        use crate::query::parse_query;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![
+                InputFile {
+                    path: "main.rs".to_string(),
+                    content: b"fn main() {\n    println!(\"hello\");\n}\n".to_vec(),
+                    mtime: 0,
+                },
+                InputFile {
+                    path: "lib.rs".to_string(),
+                    content: b"pub fn add(a: i32, b: i32) -> i32 { a + b }\n".to_vec(),
+                    mtime: 0,
+                },
+            ],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let query = parse_query("println").unwrap();
+        let options = SearchOptions::default();
+
+        let (tx, rx) = mpsc::channel();
+        search_segments_with_query_streaming(&snapshot, &query, &options, tx).unwrap();
+
+        let matches: Vec<FileMatch> = rx.into_iter().collect();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].path, PathBuf::from("main.rs"));
+        assert!(matches[0].lines[0].content.contains("println"));
+    }
+
+    #[test]
+    fn test_search_with_query_streaming_and() {
+        use crate::query::parse_query;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![
+                InputFile {
+                    path: "both.rs".to_string(),
+                    content: b"fn process() -> Result<(), Box<dyn Error>> { Ok(()) }\n".to_vec(),
+                    mtime: 0,
+                },
+                InputFile {
+                    path: "result_only.rs".to_string(),
+                    content: b"fn foo() -> Result<i32, String> { Ok(42) }\n".to_vec(),
+                    mtime: 0,
+                },
+            ],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let query = parse_query("Result Error").unwrap();
+        let options = SearchOptions::default();
+
+        let (tx, rx) = mpsc::channel();
+        search_segments_with_query_streaming(&snapshot, &query, &options, tx).unwrap();
+
+        let matches: Vec<FileMatch> = rx.into_iter().collect();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].path, PathBuf::from("both.rs"));
+    }
+
+    #[test]
+    fn test_search_with_query_streaming_dedup() {
+        use crate::query::parse_query;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg0 = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![InputFile {
+                path: "main.rs".to_string(),
+                content: b"fn main() { println!(\"old\"); }\n".to_vec(),
+                mtime: 100,
+            }],
+        );
+        let seg1 = build_segment(
+            &base_dir,
+            SegmentId(1),
+            vec![InputFile {
+                path: "main.rs".to_string(),
+                content: b"fn main() { println!(\"new\"); }\n".to_vec(),
+                mtime: 200,
+            }],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg0, seg1]);
+        let query = parse_query("println").unwrap();
+        let options = SearchOptions::default();
+
+        let (tx, rx) = mpsc::channel();
+        search_segments_with_query_streaming(&snapshot, &query, &options, tx).unwrap();
+
+        let matches: Vec<FileMatch> = rx.into_iter().collect();
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].lines[0].content.contains("new"));
+    }
+
+    #[test]
+    fn test_search_with_query_streaming_max_results() {
+        use crate::query::parse_query;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let files: Vec<InputFile> = (0..5)
+            .map(|i| InputFile {
+                path: format!("file_{i}.rs"),
+                content: format!("fn f{i}() {{ println!(\"hello\"); }}\n").into_bytes(),
+                mtime: 0,
+            })
+            .collect();
+
+        let seg = build_segment(&base_dir, SegmentId(0), files);
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let query = parse_query("println").unwrap();
+        let options = SearchOptions {
+            context_lines: 0,
+            max_results: Some(2),
+        };
+
+        let (tx, rx) = mpsc::channel();
+        search_segments_with_query_streaming(&snapshot, &query, &options, tx).unwrap();
+
+        let matches: Vec<FileMatch> = rx.into_iter().collect();
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn test_search_with_query_streaming_language_filter() {
+        use crate::query::parse_query;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![
+                InputFile {
+                    path: "main.rs".to_string(),
+                    content: b"fn main() { println!(\"hello\"); }\n".to_vec(),
+                    mtime: 0,
+                },
+                InputFile {
+                    path: "script.py".to_string(),
+                    content: b"def main():\n    println(\"hello\")\n".to_vec(),
+                    mtime: 0,
+                },
+            ],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let query = parse_query("language:rust println").unwrap();
+        let options = SearchOptions::default();
+
+        let (tx, rx) = mpsc::channel();
+        search_segments_with_query_streaming(&snapshot, &query, &options, tx).unwrap();
+
+        let matches: Vec<FileMatch> = rx.into_iter().collect();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].path, PathBuf::from("main.rs"));
     }
 }
