@@ -1501,6 +1501,126 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(2), daemon_handle).await;
     }
 
+    #[test]
+    fn test_query_search_request_serialization() {
+        let req = DaemonRequest::QuerySearch {
+            query: "language:rust println OR eprintln".to_string(),
+            limit: 100,
+            context_lines: 0,
+            color: false,
+            cwd: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: DaemonRequest = serde_json::from_str(&json).unwrap();
+        match parsed {
+            DaemonRequest::QuerySearch { query, limit, .. } => {
+                assert_eq!(query, "language:rust println OR eprintln");
+                assert_eq!(limit, 100);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_handle_query_search_request() {
+        use indexrs_core::segment::InputFile;
+
+        let dir = tempfile::tempdir().unwrap();
+        let indexrs_dir = dir.path().join(".indexrs");
+        std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+        manager
+            .index_files(vec![
+                InputFile {
+                    path: "src/main.rs".to_string(),
+                    content: b"fn main() {\n    println!(\"hello\");\n}\n".to_vec(),
+                    mtime: 100,
+                },
+                InputFile {
+                    path: "src/lib.rs".to_string(),
+                    content: b"pub fn greet() -> &'static str {\n    \"hello\"\n}\n".to_vec(),
+                    mtime: 200,
+                },
+                InputFile {
+                    path: "app.py".to_string(),
+                    content: b"def main():\n    print(\"hello\")\n    println = 1\n".to_vec(),
+                    mtime: 300,
+                },
+            ])
+            .unwrap();
+
+        let rewriter = crate::paths::PathRewriter::identity();
+
+        // 1. Simple literal: "println" should match main.rs (contains println! macro)
+        let (lines, _dur) =
+            handle_query_search_request(&manager, "println", 100, 0, false, &rewriter).unwrap();
+        assert!(
+            lines.iter().any(|l| l.contains("main.rs")),
+            "simple literal 'println' should match main.rs, got: {lines:?}"
+        );
+
+        // 2. Language filter: "language:rust main" should only match .rs files
+        let (lines, _dur) =
+            handle_query_search_request(&manager, "language:rust main", 100, 0, false, &rewriter)
+                .unwrap();
+        assert!(
+            !lines.is_empty(),
+            "language:rust main should produce results"
+        );
+        assert!(
+            lines.iter().all(|l| !l.contains("app.py")),
+            "language:rust should exclude app.py, got: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains(".rs")),
+            "language:rust main should match a .rs file, got: {lines:?}"
+        );
+
+        // 3. Implicit AND: "println main" should only match files containing BOTH terms
+        let (lines, _dur) =
+            handle_query_search_request(&manager, "println main", 100, 0, false, &rewriter)
+                .unwrap();
+        // main.rs has both "println" and "main", lib.rs has neither "println" nor "main"
+        // app.py has "main" and "println" (as variable), so it can match too
+        for line in &lines {
+            // Every matched file must contain both terms — we just check we got results
+            // and that lib.rs (which has neither println nor main) does NOT appear
+            assert!(
+                !line.contains("lib.rs"),
+                "implicit AND 'println main' should not match lib.rs (no println), got: {lines:?}"
+            );
+        }
+        assert!(
+            !lines.is_empty(),
+            "implicit AND 'println main' should have results"
+        );
+
+        // 4. OR: "println OR greet" should match both main.rs and lib.rs
+        let (lines, _dur) =
+            handle_query_search_request(&manager, "println OR greet", 100, 0, false, &rewriter)
+                .unwrap();
+        assert!(
+            lines.iter().any(|l| l.contains("main.rs")),
+            "OR query should match main.rs (has println), got: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("lib.rs")),
+            "OR query should match lib.rs (has greet), got: {lines:?}"
+        );
+
+        // 5. NOT: "main NOT println" — main.rs has both so excluded; app.py has "main"
+        //    and "println" (as variable name), so it depends on verification.
+        //    lib.rs has neither "main" nor "println" so it won't match.
+        let (lines, _dur) =
+            handle_query_search_request(&manager, "main NOT println", 100, 0, false, &rewriter)
+                .unwrap();
+        assert!(
+            lines.iter().all(|l| !l.contains("main.rs")),
+            "NOT query should exclude main.rs (has both main and println), got: {lines:?}"
+        );
+    }
+
     #[tokio::test]
     async fn test_ensure_daemon_connects_to_running() {
         use indexrs_core::segment::InputFile;
