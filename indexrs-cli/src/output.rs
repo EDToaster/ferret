@@ -67,6 +67,24 @@ pub fn setup_sigpipe() {
     }
 }
 
+/// Format a byte count as a human-readable string (B, KB, MB, GB).
+#[allow(dead_code)]
+pub fn human_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * 1024;
+    const GB: u64 = 1024 * 1024 * 1024;
+
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +129,16 @@ mod tests {
             writer.finish().unwrap();
         }
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_human_bytes() {
+        assert_eq!(human_bytes(0), "0 B");
+        assert_eq!(human_bytes(500), "500 B");
+        assert_eq!(human_bytes(1024), "1.00 KB");
+        assert_eq!(human_bytes(1536), "1.50 KB");
+        assert_eq!(human_bytes(1024 * 1024), "1.00 MB");
+        assert_eq!(human_bytes(1024 * 1024 * 1024), "1.00 GB");
+        assert_eq!(human_bytes(1024 * 1024 + 512 * 1024), "1.50 MB");
     }
 }
