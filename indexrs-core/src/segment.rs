@@ -12,6 +12,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 use memmap2::Mmap;
 use rayon::prelude::*;
@@ -58,6 +59,7 @@ pub struct Segment {
     meta_mmap: Mmap,
     paths_mmap: Mmap,
     entry_count: u32,
+    cached_tombstones: RwLock<Option<TombstoneSet>>,
 }
 
 impl std::fmt::Debug for Segment {
@@ -116,6 +118,7 @@ impl Segment {
             meta_mmap,
             paths_mmap,
             entry_count,
+            cached_tombstones: RwLock::new(None),
         })
     }
 
@@ -182,16 +185,55 @@ impl Segment {
         Ok((0..self.entry_count).map(FileId).collect())
     }
 
-    /// Load the tombstone set for this segment from disk.
+    /// Load the tombstone set for this segment, using a cached copy if available.
     ///
-    /// Reads `tombstones.bin` from the segment directory. If the file is empty
-    /// (the initial state after segment creation), returns an empty `TombstoneSet`.
+    /// On first call, reads `tombstones.bin` from disk and caches the result.
+    /// Subsequent calls return a clone of the cached value without disk I/O.
+    ///
+    /// The cache is updated via [`set_cached_tombstones`](Self::set_cached_tombstones)
+    /// when tombstones are mutated externally (e.g., during `apply_changes`).
     ///
     /// # Errors
     ///
     /// Returns [`IndexError::Io`] if the file cannot be read, or
     /// [`IndexError::IndexCorruption`] if the file is non-empty but malformed.
     pub fn load_tombstones(&self) -> Result<TombstoneSet, IndexError> {
+        // Fast path: read lock
+        {
+            let guard = self
+                .cached_tombstones
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(ts) = guard.as_ref() {
+                return Ok(ts.clone());
+            }
+        }
+        // Slow path: write lock with double-check
+        let mut guard = self
+            .cached_tombstones
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(ts) = guard.as_ref() {
+            return Ok(ts.clone());
+        }
+        let ts = self.load_tombstones_from_disk()?;
+        *guard = Some(ts.clone());
+        Ok(ts)
+    }
+
+    /// Update the cached tombstone set.
+    ///
+    /// Called after tombstones are mutated on disk (e.g., by `apply_changes`)
+    /// to keep the in-memory cache consistent.
+    pub(crate) fn set_cached_tombstones(&self, ts: TombstoneSet) {
+        *self
+            .cached_tombstones
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(ts);
+    }
+
+    /// Read tombstones from disk without caching.
+    fn load_tombstones_from_disk(&self) -> Result<TombstoneSet, IndexError> {
         let path = self.dir_path.join("tombstones.bin");
         let data = std::fs::read(&path)?;
         if data.is_empty() {
@@ -947,6 +989,56 @@ mod tests {
             .lookup_file_ids(crate::types::Trigram::from_bytes(b'f', b'n', b' '))
             .unwrap();
         assert_eq!(fids, vec![FileId(0)]);
+    }
+
+    #[test]
+    fn test_load_tombstones_caching() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        fs::create_dir_all(&base_dir).unwrap();
+
+        let files = vec![
+            InputFile {
+                path: "a.rs".to_string(),
+                content: b"fn a() {}".to_vec(),
+                mtime: 0,
+            },
+            InputFile {
+                path: "b.rs".to_string(),
+                content: b"fn b() {}".to_vec(),
+                mtime: 0,
+            },
+        ];
+
+        let writer = SegmentWriter::new(&base_dir, SegmentId(0));
+        let segment = writer.build(files).unwrap();
+
+        // First call loads from disk and caches
+        let ts1 = segment.load_tombstones().unwrap();
+        assert!(ts1.is_empty());
+
+        // Write new tombstones to disk behind the segment's back
+        let mut ts = TombstoneSet::new();
+        ts.insert(FileId(0));
+        ts.write_to(&segment.dir_path().join("tombstones.bin"))
+            .unwrap();
+
+        // Second call should return CACHED (empty) value, not the on-disk update
+        let ts2 = segment.load_tombstones().unwrap();
+        assert!(
+            ts2.is_empty(),
+            "cached tombstones should be returned, not re-read from disk"
+        );
+
+        // Explicitly update the cache
+        let mut updated = TombstoneSet::new();
+        updated.insert(FileId(0));
+        segment.set_cached_tombstones(updated);
+
+        // Now load_tombstones should return the updated value
+        let ts3 = segment.load_tombstones().unwrap();
+        assert_eq!(ts3.len(), 1);
+        assert!(ts3.contains(FileId(0)));
     }
 
     #[test]
