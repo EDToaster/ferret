@@ -3,9 +3,7 @@ use std::sync::Arc;
 use globset::{Glob, GlobMatcher};
 use indexrs_core::error::IndexError;
 use indexrs_core::index_state::SegmentList;
-use indexrs_core::multi_search::{
-    search_segments_with_pattern_and_options, search_segments_with_query,
-};
+use indexrs_core::multi_search::search_segments_with_pattern_and_options;
 use indexrs_core::query::{LiteralQuery, Query, RegexQuery, match_language, parse_query};
 use indexrs_core::search::{MatchPattern, SearchOptions};
 
@@ -263,7 +261,7 @@ pub fn run_search_streaming<W: std::io::Write>(
 ///
 /// Parses the query string into a Query AST, executes it through the full
 /// query engine pipeline (trigram extraction -> candidate filtering ->
-/// boolean verification), and outputs results in vimgrep format.
+/// boolean verification), and streams results in vimgrep format.
 pub fn run_query_search<W: std::io::Write>(
     snapshot: &SegmentList,
     query_str: &str,
@@ -274,17 +272,25 @@ pub fn run_query_search<W: std::io::Write>(
     writer: &mut StreamingWriter<W>,
 ) -> Result<ExitCode, IndexError> {
     let query = parse_query(query_str)?;
-    let opts = SearchOptions {
+    let search_opts = SearchOptions {
         context_lines,
         max_results: Some(limit),
     };
-    let result = search_segments_with_query(snapshot, &query, &opts)?;
 
-    if result.files.is_empty() {
-        return Ok(ExitCode::NoResults);
-    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let snapshot_clone = Arc::clone(snapshot);
+    let search_handle = std::thread::spawn(move || {
+        indexrs_core::multi_search::search_segments_with_query_streaming(
+            &snapshot_clone,
+            &query,
+            &search_opts,
+            tx,
+        )
+    });
 
-    for file_match in &result.files {
+    let mut has_results = false;
+    for file_match in rx {
+        has_results = true;
         let raw_path = file_match.path.to_string_lossy();
         let path_str = path_rewriter.rewrite(&raw_path);
 
@@ -310,7 +316,21 @@ pub fn run_query_search<W: std::io::Write>(
     }
     let _ = writer.finish();
 
-    Ok(ExitCode::Success)
+    match search_handle.join() {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(_) => {
+            return Err(IndexError::Io(std::io::Error::other(
+                "search thread panicked",
+            )));
+        }
+    }
+
+    Ok(if has_results {
+        ExitCode::Success
+    } else {
+        ExitCode::NoResults
+    })
 }
 
 #[cfg(test)]
