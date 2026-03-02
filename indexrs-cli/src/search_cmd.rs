@@ -3,7 +3,6 @@ use std::sync::Arc;
 use globset::{Glob, GlobMatcher};
 use indexrs_core::error::IndexError;
 use indexrs_core::index_state::SegmentList;
-use indexrs_core::multi_search::search_segments_with_pattern_and_options;
 use indexrs_core::query::{LiteralQuery, Query, RegexQuery, match_language, parse_query};
 use indexrs_core::search::{MatchPattern, SearchOptions};
 
@@ -80,87 +79,6 @@ pub fn flags_to_query(pattern: &MatchPattern, language: Option<&str>) -> Result<
 
     let lang = match_language(lang_str)?;
     Ok(Query::And(vec![Query::LanguageFilter(lang), content_query]))
-}
-
-/// Run the search command: search segments, format as vimgrep, stream to output.
-///
-/// This is the batch version that collects all results before outputting.
-/// For incremental output, use [`run_search_streaming`] instead.
-#[allow(dead_code)]
-pub fn run_search<W: std::io::Write>(
-    snapshot: &SegmentList,
-    opts: &SearchCmdOptions,
-    color: &ColorConfig,
-    path_rewriter: &PathRewriter,
-    writer: &mut StreamingWriter<W>,
-) -> Result<ExitCode, IndexError> {
-    let search_opts = SearchOptions {
-        context_lines: opts.context_lines,
-        max_results: Some(opts.limit),
-    };
-
-    let result = search_segments_with_pattern_and_options(snapshot, &opts.pattern, &search_opts)?;
-
-    if result.files.is_empty() {
-        return Ok(ExitCode::NoResults);
-    }
-
-    let glob_matcher: Option<GlobMatcher> = opts
-        .path_glob
-        .as_ref()
-        .map(|g| Glob::new(g).map(|g| g.compile_matcher()))
-        .transpose()
-        .map_err(|e| IndexError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?;
-
-    for file_match in &result.files {
-        let raw_path = file_match.path.to_string_lossy();
-
-        // Path filter (use raw repo-relative path for glob matching)
-        if let Some(ref matcher) = glob_matcher
-            && !matcher.is_match(raw_path.as_ref())
-        {
-            continue;
-        }
-
-        // Language filter
-        if let Some(ref lang) = opts.language
-            && !file_match.language.to_string().eq_ignore_ascii_case(lang)
-        {
-            continue;
-        }
-
-        let path_str = path_rewriter.rewrite(&raw_path);
-
-        for line_match in &file_match.lines {
-            let col = line_match
-                .ranges
-                .first()
-                .map(|(start, _)| start + 1)
-                .unwrap_or(1);
-
-            let line = color.format_search_line(
-                &path_str,
-                line_match.line_number,
-                col,
-                &line_match.content,
-                &line_match.ranges,
-            );
-
-            if writer.write_line(&line).is_err() {
-                break;
-            }
-        }
-    }
-    let _ = writer.finish();
-
-    if opts.stats {
-        eprintln!(
-            "{} matches in {} files ({:.1?})",
-            result.total_match_count, result.total_file_count, result.duration
-        );
-    }
-
-    Ok(ExitCode::Success)
 }
 
 /// Run the search command in streaming mode: results are displayed as they're found.
@@ -392,74 +310,6 @@ mod tests {
     }
 
     #[test]
-    fn test_search_vimgrep_format() {
-        let dir = tempfile::tempdir().unwrap();
-        let manager = build_test_index(dir.path());
-        let snapshot = manager.snapshot();
-
-        let mut buf = Vec::new();
-        let color = ColorConfig::new(false);
-
-        let opts = SearchCmdOptions {
-            pattern: MatchPattern::LiteralCaseInsensitive("println".to_string()),
-            context_lines: 0,
-            limit: 1000,
-            language: None,
-            path_glob: None,
-            stats: false,
-        };
-
-        let exit = {
-            let mut writer = StreamingWriter::new(&mut buf);
-            run_search(
-                &snapshot,
-                &opts,
-                &color,
-                &PathRewriter::identity(),
-                &mut writer,
-            )
-            .unwrap()
-        };
-        let output = String::from_utf8(buf).unwrap();
-
-        assert!(output.contains("src/main.rs:2:"));
-        assert!(output.contains("println"));
-        assert!(matches!(exit, ExitCode::Success));
-    }
-
-    #[test]
-    fn test_search_no_results() {
-        let dir = tempfile::tempdir().unwrap();
-        let manager = build_test_index(dir.path());
-        let snapshot = manager.snapshot();
-
-        let mut buf = Vec::new();
-        let color = ColorConfig::new(false);
-
-        let opts = SearchCmdOptions {
-            pattern: MatchPattern::LiteralCaseInsensitive("nonexistent_string_xyz".to_string()),
-            context_lines: 0,
-            limit: 1000,
-            language: None,
-            path_glob: None,
-            stats: false,
-        };
-
-        let exit = {
-            let mut writer = StreamingWriter::new(&mut buf);
-            run_search(
-                &snapshot,
-                &opts,
-                &color,
-                &PathRewriter::identity(),
-                &mut writer,
-            )
-            .unwrap()
-        };
-        assert!(matches!(exit, ExitCode::NoResults));
-    }
-
-    #[test]
     fn test_search_streaming_vimgrep_format() {
         let dir = tempfile::tempdir().unwrap();
         let manager = build_test_index(dir.path());
@@ -525,44 +375,6 @@ mod tests {
             .unwrap()
         };
         assert!(matches!(exit, ExitCode::NoResults));
-    }
-
-    #[test]
-    fn test_search_rewrites_paths_to_cwd_relative() {
-        let dir = tempfile::tempdir().unwrap();
-        let manager = build_test_index(dir.path());
-        let snapshot = manager.snapshot();
-
-        let mut buf = Vec::new();
-        let color = ColorConfig::new(false);
-        // Simulate CWD = repo/src (inside repo)
-        let rewriter = PathRewriter::new(Path::new("/repo"), Path::new("/repo/src"));
-
-        let opts = SearchCmdOptions {
-            pattern: MatchPattern::LiteralCaseInsensitive("println".to_string()),
-            context_lines: 0,
-            limit: 1000,
-            language: None,
-            path_glob: None,
-            stats: false,
-        };
-
-        let exit = {
-            let mut writer = StreamingWriter::new(&mut buf);
-            run_search(&snapshot, &opts, &color, &rewriter, &mut writer).unwrap()
-        };
-        let output = String::from_utf8(buf).unwrap();
-
-        // "src/main.rs" should become "main.rs" with CWD = /repo/src
-        assert!(
-            output.contains("main.rs:2:"),
-            "expected rewritten path, got: {output}"
-        );
-        assert!(
-            !output.contains("src/main.rs:"),
-            "path should not have src/ prefix"
-        );
-        assert!(matches!(exit, ExitCode::Success));
     }
 
     #[test]
