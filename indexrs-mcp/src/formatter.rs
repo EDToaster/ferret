@@ -475,7 +475,11 @@ fn format_duration_approx(secs: u64) -> String {
         let hours = secs / 3600;
         let mins = (secs % 3600) / 60;
         if mins == 0 {
-            format!("{hours} hours")
+            if hours == 1 {
+                "1 hour".to_string()
+            } else {
+                format!("{hours} hours")
+            }
         } else {
             format!("{hours}h {mins}m")
         }
@@ -1017,7 +1021,7 @@ mod tests {
 
     #[test]
     fn test_format_duration_hours() {
-        assert_eq!(format_duration_approx(3600), "1 hours");
+        assert_eq!(format_duration_approx(3600), "1 hour");
         assert_eq!(format_duration_approx(7200), "2 hours");
         assert_eq!(format_duration_approx(5400), "1h 30m");
     }
