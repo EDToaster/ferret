@@ -7,6 +7,7 @@ use indexrs_core::error::IndexError;
 use indexrs_core::git_diff::GitChangeDetector;
 use indexrs_core::segment::InputFile;
 use indexrs_core::walker::DirectoryWalkerBuilder;
+use indexrs_core::registry::{add_repo, config_file_path, load_config, save_config};
 use indexrs_core::{DEFAULT_MAX_FILE_SIZE, SegmentManager, should_index_file};
 
 /// Format a number with comma separators (e.g. 1234567 -> "1,234,567").
@@ -309,7 +310,11 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
     );
 
     // ── Phase 5: Auto-register in repo registry ──────────────────────
-    use indexrs_core::registry::{add_repo, config_file_path, load_config, save_config};
+
+    let derived_name = repo_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
 
     match load_config() {
         Ok(mut config) => {
@@ -317,9 +322,8 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
                 if let Err(e) = save_config(&config) {
                     eprintln!("Warning: could not save registry: {e}");
                 } else {
-                    let name = config.repo.last().unwrap().effective_name();
                     eprintln!(
-                        "Registered repo \"{name}\" in {}",
+                        "Registered repo \"{derived_name}\" in {}",
                         config_file_path().display()
                     );
                 }
