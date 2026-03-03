@@ -1,0 +1,128 @@
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Instant;
+
+use axum::Router;
+use axum::extract::State;
+use axum::response::Json;
+use axum::routing::get;
+use serde::Serialize;
+use tokio::sync::RwLock;
+
+/// Shared application state passed to all handlers via axum's State extractor.
+#[derive(Clone)]
+pub struct AppState {
+    inner: Arc<AppStateInner>,
+}
+
+struct AppStateInner {
+    /// Map of repo name -> absolute path to repo root.
+    repos: RwLock<HashMap<String, PathBuf>>,
+    /// Path to the indexrs binary (for ensure_daemon).
+    daemon_bin: PathBuf,
+    /// Server start time (for uptime calculation).
+    start_time: Instant,
+}
+
+impl AppState {
+    pub fn new(repos: HashMap<String, PathBuf>, daemon_bin: PathBuf) -> Self {
+        Self {
+            inner: Arc::new(AppStateInner {
+                repos: RwLock::new(repos),
+                daemon_bin,
+                start_time: Instant::now(),
+            }),
+        }
+    }
+
+    pub async fn repos(&self) -> HashMap<String, PathBuf> {
+        self.inner.repos.read().await.clone()
+    }
+
+    pub async fn repo_path(&self, name: &str) -> Option<PathBuf> {
+        self.inner.repos.read().await.get(name).cloned()
+    }
+
+    pub fn daemon_bin(&self) -> &PathBuf {
+        &self.inner.daemon_bin
+    }
+
+    pub fn uptime_seconds(&self) -> u64 {
+        self.inner.start_time.elapsed().as_secs()
+    }
+
+    pub async fn add_repo(&self, name: String, path: PathBuf) {
+        self.inner.repos.write().await.insert(name, path);
+    }
+
+    pub async fn remove_repo(&self, name: &str) -> bool {
+        self.inner.repos.write().await.remove(name).is_some()
+    }
+}
+
+#[derive(Serialize)]
+struct HealthResponse {
+    status: &'static str,
+    version: &'static str,
+    uptime_seconds: u64,
+}
+
+async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
+    Json(HealthResponse {
+        status: "ok",
+        version: env!("CARGO_PKG_VERSION"),
+        uptime_seconds: state.uptime_seconds(),
+    })
+}
+
+/// Build the full axum router. Agents A, B, C will add routes here.
+fn build_router(state: AppState) -> Router {
+    let api = Router::new().route("/health", get(health));
+
+    Router::new().nest("/api/v1", api).with_state(state)
+}
+
+/// Start the web server on the given port.
+pub async fn start_server(
+    repos: HashMap<String, PathBuf>,
+    daemon_bin: PathBuf,
+    port: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let state = AppState::new(repos, daemon_bin);
+
+    // Ensure daemons are running for all registered repos.
+    let repos_snapshot = state.repos().await;
+    for (name, path) in &repos_snapshot {
+        match indexrs_daemon::ensure_daemon(state.daemon_bin(), path).await {
+            Ok(_stream) => tracing::info!("daemon ready for repo '{name}'"),
+            Err(e) => tracing::warn!("failed to start daemon for repo '{name}': {e}"),
+        }
+    }
+
+    let app = build_router(state);
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+
+    eprintln!("indexrs web interface: http://localhost:{port}");
+    if !repos_snapshot.is_empty() {
+        let names: Vec<&str> = repos_snapshot.keys().map(|s| s.as_str()).collect();
+        eprintln!("  repos: {} ({} repos)", names.join(", "), names.len());
+    } else {
+        eprintln!("  no repos registered (use POST /api/v1/repos to add)");
+    }
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    Ok(())
+}
+
+async fn shutdown_signal() {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("failed to install CTRL+C signal handler");
+    eprintln!("\nshutting down...");
+}
