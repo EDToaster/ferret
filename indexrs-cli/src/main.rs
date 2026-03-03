@@ -123,20 +123,14 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
                 return daemon::run_via_daemon(&repo_root, request, &mut writer).await;
             }
 
-            // Resolve smart case: daemon uses explicit case flags, not smart_case.
-            let (eff_case_sensitive, eff_ignore_case) = if case_sensitive {
-                (true, false)
+            // Resolve case mode from CLI flags.
+            let case_mode = if case_sensitive {
+                indexrs_daemon::CaseMode::Sensitive
             } else if ignore_case {
-                (false, true)
-            } else if smart_case || (!case_sensitive && !ignore_case) {
-                // Smart case default: case-sensitive if query has uppercase
-                if query.chars().any(|c| c.is_uppercase()) {
-                    (true, false)
-                } else {
-                    (false, true)
-                }
+                indexrs_daemon::CaseMode::Insensitive
             } else {
-                (false, true)
+                // Default: smart case (auto-detect from query content).
+                indexrs_daemon::CaseMode::Smart
             };
 
             // Trigram search requires at least 3 characters for non-regex queries.
@@ -151,8 +145,7 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
             let request = daemon::DaemonRequest::Search {
                 query,
                 regex,
-                case_sensitive: eff_case_sensitive,
-                ignore_case: eff_ignore_case,
+                case_mode,
                 limit,
                 context_lines: context.unwrap_or(0),
                 language,

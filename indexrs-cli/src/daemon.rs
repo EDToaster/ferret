@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -29,11 +29,6 @@ use crate::wire;
 
 /// Idle timeout before daemon self-terminates.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
-
-/// Return the Unix socket path for a given repo root.
-pub fn socket_path(repo_root: &Path) -> PathBuf {
-    indexrs_daemon::socket_path(repo_root)
-}
 
 /// Run the HybridDetector event loop, applying changes to the index.
 ///
@@ -98,7 +93,7 @@ fn run_live_indexing(
 /// The daemon loads the index from `repo_root/.indexrs/`, listens on the Unix
 /// socket, and serves requests until it has been idle for [`IDLE_TIMEOUT`].
 pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
-    let sock_path = socket_path(repo_root);
+    let sock_path = indexrs_daemon::socket_path(repo_root);
 
     // Ensure the parent directory exists.
     if let Some(parent) = sock_path.parent() {
@@ -231,8 +226,15 @@ fn format_and_send_file_match(
             &line_match.ranges,
         );
 
-        if tx.send(crate::wire::encode_line_frame(&line)).is_err() {
-            return false; // receiver dropped, stop
+        match crate::wire::encode_line_frame(&line) {
+            Ok(frame) => {
+                if tx.send(frame).is_err() {
+                    return false; // receiver dropped, stop
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to encode line frame, skipping");
+            }
         }
     }
 
@@ -366,8 +368,7 @@ async fn handle_connection(
             DaemonRequest::Search {
                 query,
                 regex,
-                case_sensitive,
-                ignore_case,
+                case_mode,
                 limit,
                 context_lines,
                 language,
@@ -380,13 +381,7 @@ async fn handle_connection(
                     Some(ref cwd_str) => PathRewriter::new(repo_root, Path::new(cwd_str)),
                     None => PathRewriter::identity(),
                 };
-                let pattern = search_cmd::resolve_match_pattern(
-                    &query,
-                    regex,
-                    case_sensitive,
-                    ignore_case,
-                    false,
-                );
+                let pattern = search_cmd::resolve_match_pattern(&query, regex, case_mode);
 
                 // Validate regex before starting the search.
                 if let MatchPattern::Regex(ref pat) = pattern
@@ -1168,7 +1163,10 @@ pub async fn run_via_daemon<W: std::io::Write>(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+    use indexrs_daemon::CaseMode;
     use indexrs_daemon::try_connect;
 
     #[test]
@@ -1176,8 +1174,7 @@ mod tests {
         let req = DaemonRequest::Search {
             query: "hello".to_string(),
             regex: false,
-            case_sensitive: false,
-            ignore_case: true,
+            case_mode: CaseMode::Insensitive,
             limit: 1000,
             context_lines: 0,
             language: None,
@@ -1208,8 +1205,7 @@ mod tests {
         let req = DaemonRequest::Search {
             query: "hello".to_string(),
             regex: false,
-            case_sensitive: false,
-            ignore_case: true,
+            case_mode: CaseMode::Insensitive,
             limit: 1000,
             context_lines: 0,
             language: None,
@@ -1246,7 +1242,7 @@ mod tests {
     #[test]
     fn test_socket_path() {
         let root = PathBuf::from("/tmp/test-repo");
-        let path = socket_path(&root);
+        let path = indexrs_daemon::socket_path(&root);
         assert_eq!(path, PathBuf::from("/tmp/test-repo/.indexrs/sock"));
     }
 
@@ -1443,8 +1439,7 @@ mod tests {
         let req = serde_json::to_string(&DaemonRequest::Search {
             query: "[invalid(".to_string(),
             regex: true,
-            case_sensitive: false,
-            ignore_case: false,
+            case_mode: CaseMode::Smart,
             limit: 100,
             context_lines: 0,
             language: None,
@@ -1517,8 +1512,7 @@ mod tests {
         let req = serde_json::to_string(&DaemonRequest::Search {
             query: "println".to_string(),
             regex: false,
-            case_sensitive: false,
-            ignore_case: true,
+            case_mode: CaseMode::Insensitive,
             limit: 100,
             context_lines: 0,
             language: None,
@@ -1602,8 +1596,7 @@ mod tests {
         let request = DaemonRequest::Search {
             query: "println".to_string(),
             regex: false,
-            case_sensitive: false,
-            ignore_case: true,
+            case_mode: CaseMode::Insensitive,
             limit: 100,
             context_lines: 0,
             language: None,
@@ -1679,8 +1672,7 @@ mod tests {
         let req = serde_json::to_string(&DaemonRequest::Search {
             query: "println".to_string(),
             regex: false,
-            case_sensitive: false,
-            ignore_case: true,
+            case_mode: CaseMode::Insensitive,
             limit: 100,
             context_lines: 0,
             language: None,
@@ -1944,8 +1936,7 @@ mod tests {
         let req = serde_json::to_string(&DaemonRequest::Search {
             query: "println".to_string(),
             regex: false,
-            case_sensitive: false,
-            ignore_case: true,
+            case_mode: CaseMode::Insensitive,
             limit: 100,
             context_lines: 0,
             language: None,

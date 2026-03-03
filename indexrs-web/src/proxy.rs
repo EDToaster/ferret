@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use serde::de::DeserializeOwned;
+
 use indexrs_daemon::types::DaemonRequest;
 use indexrs_daemon::{
     FileResponse, HealthResponse, JsonSearchFrame, SearchStats, StatusResponse, ensure_daemon,
@@ -72,30 +74,14 @@ pub async fn get_file(
     };
 
     let result = send_request(daemon_bin, repo_root, &request).await?;
-
-    result
-        .payloads
-        .first()
-        .ok_or_else(|| ApiError::internal("no response from daemon"))
-        .and_then(|payload| {
-            serde_json::from_str(payload)
-                .map_err(|e| ApiError::internal(format!("failed to parse file response: {e}")))
-        })
+    parse_first_payload(&result)
 }
 
 /// Send a Status request to the daemon.
 pub async fn status(daemon_bin: &Path, repo_root: &Path) -> Result<StatusResponse, ApiError> {
     let request = DaemonRequest::Status;
     let result = send_request(daemon_bin, repo_root, &request).await?;
-
-    result
-        .payloads
-        .first()
-        .ok_or_else(|| ApiError::internal("no response from daemon"))
-        .and_then(|payload| {
-            serde_json::from_str(payload)
-                .map_err(|e| ApiError::internal(format!("failed to parse status response: {e}")))
-        })
+    parse_first_payload(&result)
 }
 
 /// Send a Health request to the daemon.
@@ -105,14 +91,20 @@ pub async fn daemon_health(
 ) -> Result<HealthResponse, ApiError> {
     let request = DaemonRequest::Health;
     let result = send_request(daemon_bin, repo_root, &request).await?;
+    parse_first_payload(&result)
+}
 
+/// Parse the first JSON payload from a daemon result into a typed response.
+fn parse_first_payload<T: DeserializeOwned>(
+    result: &indexrs_daemon::JsonResult,
+) -> Result<T, ApiError> {
     result
         .payloads
         .first()
         .ok_or_else(|| ApiError::internal("no response from daemon"))
         .and_then(|payload| {
             serde_json::from_str(payload)
-                .map_err(|e| ApiError::internal(format!("failed to parse health response: {e}")))
+                .map_err(|e| ApiError::internal(format!("failed to parse daemon response: {e}")))
         })
 }
 

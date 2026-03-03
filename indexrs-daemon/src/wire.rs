@@ -45,26 +45,30 @@ async fn write_string_frame<W: AsyncWriteExt + Unpin>(
             ),
         ));
     }
-    let mut header = [0u8; 5];
-    header[0] = tag;
-    header[1..5].copy_from_slice(&(payload.len() as u32).to_le_bytes());
-    writer.write_all(&header).await?;
-    writer.write_all(payload).await
+    let mut frame = Vec::with_capacity(5 + payload.len());
+    frame.push(tag);
+    frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    frame.extend_from_slice(payload);
+    writer.write_all(&frame).await
 }
 
 /// Build a Line TLV frame synchronously (for use on blocking threads).
-pub fn encode_line_frame(content: &str) -> Vec<u8> {
+pub fn encode_line_frame(content: &str) -> io::Result<Vec<u8>> {
     let payload = content.as_bytes();
-    assert!(
-        payload.len() <= MAX_STRING_PAYLOAD as usize,
-        "string payload too large to encode: {} bytes (max {MAX_STRING_PAYLOAD})",
-        payload.len()
-    );
+    if payload.len() > MAX_STRING_PAYLOAD as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "string payload too large to encode: {} bytes (max {MAX_STRING_PAYLOAD})",
+                payload.len()
+            ),
+        ));
+    }
     let mut frame = Vec::with_capacity(5 + payload.len());
     frame.push(TAG_LINE);
     frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
     frame.extend_from_slice(payload);
-    frame
+    Ok(frame)
 }
 
 /// Read `len` bytes from the reader and convert to a UTF-8 string.
@@ -368,16 +372,17 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "payload too large")]
     fn test_encode_line_frame_rejects_oversized() {
         let huge = "x".repeat(MAX_STRING_PAYLOAD as usize + 1);
-        encode_line_frame(&huge);
+        let err = encode_line_frame(&huge).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("payload too large"));
     }
 
     #[test]
     fn test_encode_line_frame_accepts_max_size() {
         let max = "x".repeat(MAX_STRING_PAYLOAD as usize);
-        let frame = encode_line_frame(&max);
+        let frame = encode_line_frame(&max).unwrap();
         assert_eq!(frame.len(), 5 + MAX_STRING_PAYLOAD as usize);
     }
 }

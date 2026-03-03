@@ -7,4 +7,4 @@ pub use client::{JsonResult, ensure_daemon, send_json_request, socket_path, try_
 pub use json_protocol::{
     FileResponse, HealthResponse, JsonSearchFrame, SearchStats, SegmentInfo, StatusResponse,
 };
-pub use types::{DaemonRequest, DaemonResponse};
+pub use types::{CaseMode, DaemonRequest, DaemonResponse};

@@ -97,10 +97,11 @@ pub async fn send_json_request(
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
-    let json =
+    let mut json =
         serde_json::to_string(request).map_err(|e| IndexError::Io(std::io::Error::other(e)))?;
+    json.push('\n');
     writer
-        .write_all(format!("{json}\n").as_bytes())
+        .write_all(json.as_bytes())
         .await
         .map_err(IndexError::Io)?;
 

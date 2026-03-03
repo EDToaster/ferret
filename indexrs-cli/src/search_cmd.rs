@@ -4,6 +4,7 @@ use indexrs_core::error::IndexError;
 use indexrs_core::index_state::SegmentList;
 use indexrs_core::query::{LiteralQuery, Query, RegexQuery, match_language, parse_query};
 use indexrs_core::search::{MatchPattern, SearchOptions};
+use indexrs_daemon::CaseMode;
 
 use crate::color::ColorConfig;
 use crate::output::{ExitCode, StreamingWriter};
@@ -11,31 +12,24 @@ use crate::paths::PathRewriter;
 
 /// Resolve CLI flags into a MatchPattern.
 ///
-/// Priority: regex > case_sensitive > ignore_case > smart_case > default (smart case).
-/// Smart case: case-sensitive if the query contains any uppercase character,
-/// otherwise case-insensitive.
-pub fn resolve_match_pattern(
-    query: &str,
-    regex: bool,
-    case_sensitive: bool,
-    ignore_case: bool,
-    smart_case: bool,
-) -> MatchPattern {
+/// If `regex` is true, returns a Regex pattern (always case-sensitive).
+/// Otherwise, uses `case_mode` to select literal vs case-insensitive matching.
+/// Smart mode: case-sensitive if the query contains any uppercase character.
+pub fn resolve_match_pattern(query: &str, regex: bool, case_mode: CaseMode) -> MatchPattern {
     if regex {
         MatchPattern::Regex(query.to_string())
-    } else if case_sensitive {
-        MatchPattern::Literal(query.to_string())
-    } else if ignore_case {
-        MatchPattern::LiteralCaseInsensitive(query.to_string())
-    } else if smart_case || (!case_sensitive && !ignore_case) {
-        // Smart case: if query has uppercase, treat as case-sensitive
-        if query.chars().any(|c| c.is_uppercase()) {
-            MatchPattern::Literal(query.to_string())
-        } else {
-            MatchPattern::LiteralCaseInsensitive(query.to_string())
-        }
     } else {
-        MatchPattern::LiteralCaseInsensitive(query.to_string())
+        match case_mode {
+            CaseMode::Sensitive => MatchPattern::Literal(query.to_string()),
+            CaseMode::Insensitive => MatchPattern::LiteralCaseInsensitive(query.to_string()),
+            CaseMode::Smart => {
+                if query.chars().any(|c| c.is_uppercase()) {
+                    MatchPattern::Literal(query.to_string())
+                } else {
+                    MatchPattern::LiteralCaseInsensitive(query.to_string())
+                }
+            }
+        }
     }
 }
 
@@ -151,32 +145,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_resolve_match_pattern_literal() {
-        let pattern = resolve_match_pattern("hello", false, false, true, false);
+    fn test_resolve_match_pattern_insensitive() {
+        let pattern = resolve_match_pattern("hello", false, CaseMode::Insensitive);
         assert!(matches!(pattern, MatchPattern::LiteralCaseInsensitive(_)));
     }
 
     #[test]
     fn test_resolve_match_pattern_case_sensitive() {
-        let pattern = resolve_match_pattern("hello", false, true, false, false);
+        let pattern = resolve_match_pattern("hello", false, CaseMode::Sensitive);
         assert!(matches!(pattern, MatchPattern::Literal(_)));
     }
 
     #[test]
     fn test_resolve_match_pattern_regex() {
-        let pattern = resolve_match_pattern("fn\\s+", true, false, false, false);
+        let pattern = resolve_match_pattern("fn\\s+", true, CaseMode::Insensitive);
         assert!(matches!(pattern, MatchPattern::Regex(_)));
     }
 
     #[test]
     fn test_resolve_match_pattern_smart_case_lower() {
-        let pattern = resolve_match_pattern("hello", false, false, false, true);
+        let pattern = resolve_match_pattern("hello", false, CaseMode::Smart);
         assert!(matches!(pattern, MatchPattern::LiteralCaseInsensitive(_)));
     }
 
     #[test]
     fn test_resolve_match_pattern_smart_case_upper() {
-        let pattern = resolve_match_pattern("Hello", false, false, false, true);
+        let pattern = resolve_match_pattern("Hello", false, CaseMode::Smart);
         assert!(matches!(pattern, MatchPattern::Literal(_)));
     }
 

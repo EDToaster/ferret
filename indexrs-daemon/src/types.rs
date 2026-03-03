@@ -1,5 +1,16 @@
 use serde::{Deserialize, Serialize};
 
+/// How to handle case sensitivity for a search query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CaseMode {
+    /// Match case exactly.
+    Sensitive,
+    /// Ignore case differences.
+    Insensitive,
+    /// Auto-detect: case-sensitive if query has uppercase, else insensitive.
+    Smart,
+}
+
 /// Request from CLI client to daemon.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -7,8 +18,7 @@ pub enum DaemonRequest {
     Search {
         query: String,
         regex: bool,
-        case_sensitive: bool,
-        ignore_case: bool,
+        case_mode: CaseMode,
         limit: usize,
         context_lines: usize,
         language: Option<String>,
