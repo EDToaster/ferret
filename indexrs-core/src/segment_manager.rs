@@ -170,13 +170,19 @@ impl SegmentManager {
         self.state.publish(segments);
     }
 
-    /// Find all (segment_index, file_id) pairs for a given relative path
-    /// across the current segments.
+    /// Build a map from path to [(segment_index, file_id)] for a set of paths.
     ///
-    /// Searches segments in order, checking metadata for path matches.
-    /// This is used by `apply_changes()` to locate entries that need tombstoning.
-    fn find_file_in_segments(segments: &[Arc<Segment>], path: &str) -> Vec<(usize, FileId)> {
-        let mut results = Vec::new();
+    /// Scans each segment's metadata once, collecting FileIds for all requested
+    /// paths in a single pass. This is O(segments × entries_per_segment) regardless
+    /// of how many paths are queried, vs the previous approach which was
+    /// O(query_paths × total_entries).
+    fn batch_find_files_in_segments(
+        segments: &[Arc<Segment>],
+        paths: &std::collections::HashSet<String>,
+    ) -> std::collections::HashMap<String, Vec<(usize, FileId)>> {
+        let mut result: std::collections::HashMap<String, Vec<(usize, FileId)>> =
+            std::collections::HashMap::new();
+
         for (seg_idx, segment) in segments.iter().enumerate() {
             let reader = segment.metadata_reader();
             let tombstones = segment.load_tombstones().unwrap_or_default();
@@ -186,12 +192,16 @@ impl SegmentManager {
                     Ok(e) => e,
                     Err(_) => continue,
                 };
-                if entry.path == path && !tombstones.contains(entry.file_id) {
-                    results.push((seg_idx, entry.file_id));
+                if paths.contains(&entry.path) && !tombstones.contains(entry.file_id) {
+                    result
+                        .entry(entry.path)
+                        .or_default()
+                        .push((seg_idx, entry.file_id));
                 }
             }
         }
-        results
+
+        result
     }
 
     /// Index a set of files, splitting into multiple segments when the
@@ -385,32 +395,37 @@ impl SegmentManager {
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
         let current_segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
 
-        // Track tombstones to write per segment index
+        // Collect paths that need tombstoning
+        let tombstone_paths: std::collections::HashSet<String> = changes
+            .iter()
+            .filter(|c| tombstone::needs_tombstone(&c.kind))
+            .map(|c| c.path.to_string_lossy().to_string())
+            .collect();
+
+        // Batch lookup: one pass over all segments
+        let tombstone_locations =
+            Self::batch_find_files_in_segments(&current_segments, &tombstone_paths);
+
+        // Build tombstone updates from batch results
         let mut tombstone_updates: std::collections::HashMap<usize, TombstoneSet> =
             std::collections::HashMap::new();
+        for (_path, locations) in &tombstone_locations {
+            for &(seg_idx, file_id) in locations {
+                tombstone_updates
+                    .entry(seg_idx)
+                    .or_default()
+                    .insert(file_id);
+            }
+        }
 
         // Collect files that need new entries
         let mut new_files: Vec<InputFile> = Vec::new();
 
         for change in changes {
-            let path_str = change.path.to_string_lossy().to_string();
-
-            // Tombstone old entries if needed
-            if tombstone::needs_tombstone(&change.kind) {
-                let locations = Self::find_file_in_segments(&current_segments, &path_str);
-                for (seg_idx, file_id) in locations {
-                    tombstone_updates
-                        .entry(seg_idx)
-                        .or_default()
-                        .insert(file_id);
-                }
-            }
-
             // Read new content if needed
             if tombstone::needs_new_entry(&change.kind) {
-                // Finding 8: Validate path to prevent path traversal attacks.
-                // Since the file may not exist yet we cannot canonicalize it,
-                // so we check that the path has no `..` components and is not absolute.
+                let path_str = change.path.to_string_lossy().to_string();
+
                 let has_dotdot = change
                     .path
                     .components()
@@ -427,7 +442,6 @@ impl SegmentManager {
                 if full_path.is_file() {
                     let content = fs::read(&full_path)?;
 
-                    // Finding 9: Skip binary files and files exceeding the size limit.
                     if !crate::binary::should_index_file(&full_path, &content, 1_048_576) {
                         continue;
                     }
@@ -519,26 +533,37 @@ impl SegmentManager {
         };
         let current_segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
 
+        // Collect paths that need tombstoning
+        let tombstone_paths: std::collections::HashSet<String> = changes
+            .iter()
+            .filter(|c| tombstone::needs_tombstone(&c.kind))
+            .map(|c| c.path.to_string_lossy().to_string())
+            .collect();
+
+        // Batch lookup: one pass over all segments
+        let tombstone_locations =
+            Self::batch_find_files_in_segments(&current_segments, &tombstone_paths);
+
+        // Build tombstone updates from batch results
         let mut tombstone_updates: std::collections::HashMap<usize, TombstoneSet> =
             std::collections::HashMap::new();
+        for (_path, locations) in &tombstone_locations {
+            for &(seg_idx, file_id) in locations {
+                tombstone_updates
+                    .entry(seg_idx)
+                    .or_default()
+                    .insert(file_id);
+            }
+        }
 
+        // Collect files that need new entries
         let mut new_files: Vec<InputFile> = Vec::new();
         let total_changes = changes.len();
 
         for (i, change) in changes.iter().enumerate() {
-            let path_str = change.path.to_string_lossy().to_string();
-
-            if tombstone::needs_tombstone(&change.kind) {
-                let locations = Self::find_file_in_segments(&current_segments, &path_str);
-                for (seg_idx, file_id) in locations {
-                    tombstone_updates
-                        .entry(seg_idx)
-                        .or_default()
-                        .insert(file_id);
-                }
-            }
-
             if tombstone::needs_new_entry(&change.kind) {
+                let path_str = change.path.to_string_lossy().to_string();
+
                 let has_dotdot = change
                     .path
                     .components()
@@ -1830,5 +1855,57 @@ mod tests {
                 .any(|e| matches!(e, ReindexProgress::BuildingSegment { .. })),
             "expected BuildingSegment event, got: {events:?}"
         );
+    }
+
+    #[test]
+    fn test_batch_find_files_in_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Build two segments with known files
+        manager
+            .index_files(vec![
+                InputFile {
+                    path: "a.rs".to_string(),
+                    content: b"fn a() {}".to_vec(),
+                    mtime: 100,
+                },
+                InputFile {
+                    path: "b.rs".to_string(),
+                    content: b"fn b() {}".to_vec(),
+                    mtime: 100,
+                },
+            ])
+            .unwrap();
+        manager
+            .index_files(vec![InputFile {
+                path: "c.rs".to_string(),
+                content: b"fn c() {}".to_vec(),
+                mtime: 100,
+            }])
+            .unwrap();
+
+        let snap = manager.snapshot();
+        let paths: std::collections::HashSet<String> = ["a.rs", "c.rs", "missing.rs"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let result = SegmentManager::batch_find_files_in_segments(&snap, &paths);
+
+        // a.rs is in segment 0, c.rs is in segment 1, missing.rs not found
+        assert!(result.contains_key("a.rs"));
+        assert!(result.contains_key("c.rs"));
+        assert!(!result.contains_key("missing.rs"));
+
+        let a_locs = &result["a.rs"];
+        assert_eq!(a_locs.len(), 1);
+        assert_eq!(a_locs[0].0, 0); // segment index 0
+
+        let c_locs = &result["c.rs"];
+        assert_eq!(c_locs.len(), 1);
+        assert_eq!(c_locs[0].0, 1); // segment index 1
     }
 }
