@@ -774,9 +774,7 @@ impl SegmentManager {
     pub fn should_compact(&self) -> bool {
         let snap = self.state.snapshot();
 
-        if snap.len() > DEFAULT_MAX_SEGMENTS {
-            return true;
-        }
+        let mut total_tombstoned: u64 = 0;
 
         for segment in snap.iter() {
             if segment.entry_count() == 0 {
@@ -786,9 +784,19 @@ impl SegmentManager {
                 Ok(ts) => ts,
                 Err(_) => continue,
             };
+            total_tombstoned += tombstones.len() as u64;
+
+            // Any single segment with excessive tombstone ratio → compact.
             if tombstones.tombstone_ratio(segment.entry_count()) > DEFAULT_MAX_TOMBSTONE_RATIO {
                 return true;
             }
+        }
+
+        // Too many segments, but only if there are tombstones to reclaim.
+        // Without tombstones, compaction with the same budget produces the
+        // same number of segments — it would be a no-op waste of CPU.
+        if snap.len() > DEFAULT_MAX_SEGMENTS && total_tombstoned > 0 {
+            return true;
         }
 
         false
@@ -1260,12 +1268,14 @@ mod tests {
     }
 
     #[test]
-    fn test_should_compact_too_many_segments() {
+    fn test_should_compact_too_many_clean_segments_skips() {
         let dir = tempfile::tempdir().unwrap();
         let base_dir = dir.path().join(".indexrs");
         let manager = SegmentManager::new(&base_dir).unwrap();
 
-        // Add 11 segments (exceeds default threshold of 10)
+        // Add 11 segments (exceeds default threshold of 10) but no tombstones.
+        // Compaction with the same budget would produce the same number of
+        // segments, so it should NOT trigger.
         for i in 0..11 {
             manager
                 .index_files(vec![InputFile {
@@ -1275,6 +1285,38 @@ mod tests {
                 }])
                 .unwrap();
         }
+
+        assert!(!manager.should_compact());
+    }
+
+    #[test]
+    fn test_should_compact_too_many_segments_with_tombstones() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Add 11 segments (exceeds default threshold of 10).
+        for i in 0..11 {
+            let filename = format!("file_{i}.rs");
+            let filepath = repo_dir.join(&filename);
+            fs::write(&filepath, format!("fn f_{i}() {{}}")).unwrap();
+            manager
+                .index_files(vec![InputFile {
+                    path: filename,
+                    content: format!("fn f_{i}() {{}}").into_bytes(),
+                    mtime: 0,
+                }])
+                .unwrap();
+        }
+
+        // Delete one file to create a tombstone, making compaction worthwhile.
+        let changes = vec![crate::changes::ChangeEvent {
+            path: std::path::PathBuf::from("file_0.rs"),
+            kind: crate::changes::ChangeKind::Deleted,
+        }];
+        manager.apply_changes(&repo_dir, &changes).unwrap();
 
         assert!(manager.should_compact());
     }
