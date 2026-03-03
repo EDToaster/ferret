@@ -9,6 +9,7 @@ mod mcp;
 mod output;
 mod paths;
 mod preview;
+mod reindex_display;
 mod repo;
 mod repos;
 mod search_cmd;
@@ -228,11 +229,7 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
                 // Full rebuild — same as init --force.
                 init::run_init(&repo_root, true)?;
             } else {
-                // Send Reindex request to daemon.
-                let request = daemon::DaemonRequest::Reindex;
-                let stdout = std::io::stdout();
-                let mut writer = StreamingWriter::new(stdout.lock());
-                daemon::run_via_daemon(&repo_root, request, &mut writer).await?;
+                reindex_display::run_reindex_with_progress(&repo_root).await?;
             }
             Ok(ExitCode::Success)
         }
