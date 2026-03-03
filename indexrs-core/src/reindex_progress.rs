@@ -21,6 +21,8 @@ pub enum ReindexProgress {
     },
     /// No changes found.
     NoChanges,
+    /// Waiting for the write lock (another operation is in progress).
+    WaitingForLock,
     /// Reading and filtering changed files before indexing.
     PreparingFiles { current: usize, total: usize },
     /// Building a segment: file `files_done` of `files_total` processed.

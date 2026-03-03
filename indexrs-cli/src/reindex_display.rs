@@ -149,6 +149,21 @@ impl ProgressRenderer {
                     sp.finish_and_clear();
                 }
             }
+            ReindexProgress::WaitingForLock => {
+                self.clear();
+                let sp = ProgressBar::new_spinner();
+                sp.set_style(
+                    ProgressStyle::with_template("{spinner:.cyan} {msg}")
+                        .unwrap()
+                        .tick_strings(&[
+                            "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}",
+                            "\u{2826}", "\u{2827}", "\u{2807}", "\u{280f}",
+                        ]),
+                );
+                sp.set_message("Waiting for background indexing to finish...");
+                sp.enable_steady_tick(std::time::Duration::from_millis(80));
+                self.spinner = Some(sp);
+            }
             ReindexProgress::PreparingFiles { current, total } => {
                 if let Some(bar) = &self.bar {
                     bar.set_length(total as u64);

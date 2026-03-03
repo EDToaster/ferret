@@ -424,7 +424,7 @@ impl SegmentManager {
                 }
 
                 let full_path = repo_dir.join(&change.path);
-                if full_path.exists() {
+                if full_path.is_file() {
                     let content = fs::read(&full_path)?;
 
                     // Finding 9: Skip binary files and files exceeding the size limit.
@@ -509,7 +509,14 @@ impl SegmentManager {
         tracing::info!(change_count = changes.len(), "applying changes");
         let start = std::time::Instant::now();
 
-        let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = match self.write_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                on_progress(ReindexProgress::WaitingForLock);
+                self.write_lock.lock().unwrap_or_else(|e| e.into_inner())
+            }
+            Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+        };
         let current_segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
 
         let mut tombstone_updates: std::collections::HashMap<usize, TombstoneSet> =
@@ -545,7 +552,7 @@ impl SegmentManager {
                 }
 
                 let full_path = repo_dir.join(&change.path);
-                if full_path.exists() {
+                if full_path.is_file() {
                     let content = fs::read(&full_path)?;
 
                     if !crate::binary::should_index_file(&full_path, &content, 1_048_576) {
