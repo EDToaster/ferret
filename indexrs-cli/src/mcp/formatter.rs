@@ -294,67 +294,6 @@ pub fn format_file_info_list(files: &[FileInfo], query: &str) -> String {
     out
 }
 
-// ---- File content formatting (used by get_file tool) ----
-
-/// Format file content with line numbers.
-///
-/// Output format:
-/// ```text
-/// src/index/trigram.rs (lines 1-85 of 142, Rust)
-///
-///   1 | use std::collections::HashMap;
-///   2 | use roaring::RoaringBitmap;
-/// ```
-pub fn format_file_content(
-    path: &str,
-    language: Language,
-    total_lines: usize,
-    start_line: usize,
-    lines: &[&str],
-    truncated: bool,
-) -> String {
-    let mut out = String::new();
-
-    if lines.is_empty() {
-        let lang_str = if language == Language::Unknown {
-            String::new()
-        } else {
-            format!(", {language}")
-        };
-        writeln!(out, "{path} (empty file{lang_str})").unwrap();
-        return out;
-    }
-
-    let end_line = start_line + lines.len() - 1;
-    let lang_str = if language == Language::Unknown {
-        String::new()
-    } else {
-        format!(", {language}")
-    };
-    writeln!(
-        out,
-        "{path} (lines {start_line}-{end_line} of {total_lines}{lang_str})"
-    )
-    .unwrap();
-    writeln!(out).unwrap();
-
-    let width = format!("{}", start_line + lines.len()).len();
-    for (i, line) in lines.iter().enumerate() {
-        let line_num = start_line + i;
-        writeln!(out, "{line_num:>width$} | {line}").unwrap();
-    }
-
-    if truncated {
-        writeln!(
-            out,
-            "\n(truncated at line {end_line} -- use start_line/end_line to read more)"
-        )
-        .unwrap();
-    }
-
-    out
-}
-
 /// Format file content using `FileFormatMetadata` (foundation API).
 pub fn format_file_content_with_metadata(
     content: &str,
@@ -846,44 +785,6 @@ mod tests {
     fn test_format_file_info_list_empty() {
         let output = format_file_info_list(&[], "nonexistent");
         assert!(output.contains("Found 0 files matching \"nonexistent\""));
-    }
-
-    // ---- format_file_content (file-tools agent API) ----
-
-    #[test]
-    fn test_format_file_content_basic() {
-        let lines = vec!["fn main() {}", "    println!(\"hello\");", "}"];
-        let result = format_file_content("src/main.rs", Language::Rust, 3, 1, &lines, false);
-        assert!(result.contains("src/main.rs (lines 1-3 of 3, Rust)"));
-        assert!(result.contains("1 | fn main() {}"));
-        assert!(result.contains("2 |     println!(\"hello\");"));
-        assert!(result.contains("3 | }"));
-        assert!(!result.contains("truncated"));
-    }
-
-    #[test]
-    fn test_format_file_content_truncated() {
-        let lines = vec!["line1", "line2"];
-        let result = format_file_content("a.rs", Language::Rust, 1000, 499, &lines, true);
-        assert!(result.contains("lines 499-500 of 1000"));
-        assert!(result.contains("truncated at line 500"));
-    }
-
-    #[test]
-    fn test_format_file_content_line_number_width() {
-        let lines: Vec<&str> = vec!["x", "x", "x"];
-        let result = format_file_content("a.rs", Language::Rust, 1000, 998, &lines, false);
-        // Line numbers 998, 999, 1000 -- all should be 4 digits wide
-        assert!(result.contains(" 998 | x"));
-        assert!(result.contains(" 999 | x"));
-        assert!(result.contains("1000 | x"));
-    }
-
-    #[test]
-    fn test_format_file_content_empty() {
-        let lines: Vec<&str> = vec![];
-        let result = format_file_content("empty.rs", Language::Rust, 0, 1, &lines, false);
-        assert!(result.contains("empty.rs (empty file, Rust)"));
     }
 
     // ---- format_file_content_with_metadata (foundation API) ----

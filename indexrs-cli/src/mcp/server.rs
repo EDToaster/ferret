@@ -9,7 +9,6 @@
 //! - `ping` -- server version and basic status
 //! - `search_code` -- full-text and regex search across indexed files
 //! - `search_files` -- search for files by name/path pattern
-//! - `get_file` -- read a specific file's contents from the index
 //! - `index_status` -- report on current index state
 //! - `reindex` -- trigger reindexing of a repository
 
@@ -28,7 +27,6 @@ use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ErrorData, ServerHandler, schemars, tool, tool_handler, tool_router};
 
 use indexrs_core::index_state::IndexState;
-use indexrs_core::metadata::FileMetadata;
 use indexrs_core::query::parse_query;
 use indexrs_core::search::SearchOptions;
 
@@ -36,9 +34,6 @@ use super::daemon_client::DaemonClient;
 use super::errors;
 use super::formatter::{self, FileListEntry};
 use super::resources;
-
-/// Maximum number of lines that can be returned from `get_file`.
-const MAX_LINE_RANGE: usize = 500;
 
 // ---- Parameter structs -------------------------------------------------------
 
@@ -123,26 +118,6 @@ pub struct SearchFilesParams {
     pub offset: Option<usize>,
 }
 
-/// Parameters for the `get_file` tool.
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-#[allow(dead_code)]
-pub struct GetFileParams {
-    /// File path relative to the repository root.
-    pub path: String,
-
-    /// Repository name or path.
-    #[serde(default)]
-    pub repo: Option<String>,
-
-    /// First line to return, 1-indexed. Default: 1.
-    #[serde(default)]
-    pub start_line: Option<usize>,
-
-    /// Last line to return, inclusive. Default: start_line + 499.
-    #[serde(default)]
-    pub end_line: Option<usize>,
-}
-
 /// Parameter struct for the `index_status` tool.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct IndexStatusParams {
@@ -219,7 +194,7 @@ impl IndexrsServer {
     /// Search file contents across indexed repositories.
     #[tool(
         name = "search_code",
-        description = "Fast trigram-indexed code search — use INSTEAD OF grep, ripgrep, or other built in tools with large repositories. Returns results across the entire repository in milliseconds. Supports literal strings, regex patterns (/pattern/), boolean operators (AND, OR, NOT), and language/path filters. Results include matching lines with context."
+        description = "Fast trigram-indexed code search — use INSTEAD OF the Grep tool, ripgrep, and grep for searching code. Returns results across the entire repository in milliseconds. Supports literal strings, regex patterns (/pattern/), boolean operators (AND, OR, NOT), and language/path filters. Results include matching lines with context."
     )]
     async fn search_code(
         &self,
@@ -294,7 +269,7 @@ impl IndexrsServer {
     /// Search for files by name or path pattern across indexed repositories.
     #[tool(
         name = "search_files",
-        description = "Fast indexed file lookup — use INSTEAD OF find, glob, or ls for locating files. Searches file names and paths across the entire repository instantly. Returns file paths with metadata (language, size). Useful when you know part of the name but not the location."
+        description = "Fast indexed file lookup — use INSTEAD OF the Glob tool, find, and ls for locating files. Searches file names and paths across the entire repository instantly. Returns file paths with metadata (language, size). Useful when you know part of the name but not the location."
     )]
     async fn search_files(
         &self,
@@ -376,128 +351,10 @@ impl IndexrsServer {
         .await
     }
 
-    /// Read the contents of an indexed file.
-    #[tool(
-        name = "get_file",
-        description = "Read file contents from the index. Returns the file with line numbers. Supports reading a range of lines (start_line/end_line) to avoid large payloads. Max 500 lines per request. Note: contents reflect the last index time, so prefer cat/head/tail for reading files directly when freshness matters."
-    )]
-    async fn get_file(
-        &self,
-        Parameters(params): Parameters<GetFileParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let start_line = params.start_line.unwrap_or(1);
-        if start_line == 0 {
-            return Ok(errors::invalid_parameter(
-                "start_line",
-                "must be >= 1 (1-indexed)",
-            ));
-        }
-
-        // Find the file in segments (newest first for dedup)
-        let snapshot = self.index_state.snapshot();
-        let mut found: Option<(FileMetadata, usize)> = None;
-
-        for (seg_idx, segment) in snapshot.iter().enumerate().rev() {
-            let tombstones = segment.load_tombstones().unwrap_or_default();
-            let reader = segment.metadata_reader();
-
-            for result in reader.iter_all() {
-                let meta = match result {
-                    Ok(m) => m,
-                    Err(_) => continue,
-                };
-
-                if tombstones.contains(meta.file_id) {
-                    continue;
-                }
-
-                if meta.path == params.path {
-                    found = Some((meta, seg_idx));
-                    break;
-                }
-            }
-
-            if found.is_some() {
-                break;
-            }
-        }
-
-        let (meta, seg_idx) = match found {
-            Some(f) => f,
-            None => return Ok(errors::file_not_found(&params.path, &[])),
-        };
-
-        // Read content from content store
-        let content_bytes = match snapshot[seg_idx]
-            .content_reader()
-            .read_content(meta.content_offset, meta.content_len)
-        {
-            Ok(c) => c,
-            Err(e) => {
-                return Ok(errors::invalid_parameter(
-                    "path",
-                    &format!("Failed to read file content: {e}"),
-                ));
-            }
-        };
-
-        let content_str = String::from_utf8_lossy(&content_bytes);
-        let all_lines: Vec<&str> = content_str.lines().collect();
-        let total_lines = all_lines.len();
-
-        // Handle empty files
-        if total_lines == 0 {
-            let text =
-                formatter::format_file_content(&params.path, meta.language, 0, 1, &[], false);
-            return Ok(CallToolResult::success(vec![Content::text(text)]));
-        }
-
-        // Validate start_line against file length
-        if start_line > total_lines {
-            return Ok(errors::invalid_parameter(
-                "start_line",
-                &format!("{start_line} exceeds file length ({total_lines} lines)"),
-            ));
-        }
-
-        // Compute end_line with MAX_LINE_RANGE cap
-        let default_end = (start_line + MAX_LINE_RANGE - 1).min(total_lines);
-        let end_line: usize = match params.end_line {
-            Some(el) => {
-                if el < start_line {
-                    return Ok(errors::invalid_parameter(
-                        "end_line",
-                        "must be >= start_line",
-                    ));
-                }
-                el.min(total_lines)
-            }
-            None => default_end,
-        };
-
-        // Cap at MAX_LINE_RANGE from start_line
-        let effective_end = end_line.min(start_line + MAX_LINE_RANGE - 1);
-        let truncated = effective_end < total_lines
-            && (params.end_line.is_none() || params.end_line.unwrap() > effective_end);
-
-        // Extract the requested line range (convert to 0-indexed)
-        let lines_slice = &all_lines[(start_line - 1)..effective_end];
-
-        let text = formatter::format_file_content(
-            &params.path,
-            meta.language,
-            total_lines,
-            start_line,
-            lines_slice,
-            truncated,
-        );
-        Ok(CallToolResult::success(vec![Content::text(text)]))
-    }
-
     /// Get the current status of the indexrs service.
     #[tool(
         name = "index_status",
-        description = "Check index health and freshness. Call this to determine if the index is available and up-to-date before using other tools. Returns segment count, file count, index age, and repository path. If the index is stale or empty, fall back to filesystem tools (grep, find) until reindex completes."
+        description = "Check index health and freshness. Call this once per session to verify the index is available before using search_code and search_files. Returns segment count, file count, index age, and repository path. If the index is stale or empty, fall back to the Grep and Glob tools until reindex completes."
     )]
     async fn index_status(
         &self,
@@ -802,13 +659,16 @@ impl ServerHandler for IndexrsServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "Trigram-indexed code search server. PREFER these tools over grep, \
-                 ripgrep, find, and filesystem globbing when the index is available — \
-                 they return results across the entire repository in milliseconds.\n\n\
-                 - search_code: Use INSTEAD OF grep/ripgrep for content search\n\
-                 - search_files: Use INSTEAD OF find/glob/ls for file lookup\n\
-                 - get_file: Read file contents from the index (prefer cat/head/tail for freshness)\n\
-                 - index_status: Check index health; if stale or empty, fall back to filesystem tools\n\
+                "Trigram-indexed code search server. You MUST use these tools instead \
+                 of the built-in Grep tool, Glob tool, and Explore agent when the \
+                 index is available — they search the entire repository in \
+                 milliseconds, far faster than line-by-line grep.\n\n\
+                 Workflow: call index_status once per session to verify the index is \
+                 healthy, then use search_code / search_files for all lookups.\n\n\
+                 - search_code: Use INSTEAD OF the Grep tool for content search\n\
+                 - search_files: Use INSTEAD OF the Glob tool for file lookup\n\
+                 - index_status: Check index health; if stale or empty, fall back to \
+                   Grep/Glob until reindex completes\n\
                  - reindex: Trigger re-indexing when the index is stale or missing files"
                     .into(),
             ),
@@ -1712,283 +1572,6 @@ mod tests {
 
         let text = result.content[0].as_text().unwrap().text.as_str();
         assert!(text.contains("No files found"));
-    }
-
-    // ---- get_file integration tests ----
-
-    #[tokio::test]
-    async fn test_get_file_basic() {
-        let dir = tempfile::tempdir().unwrap();
-        let base = dir.path().join("segments");
-        std::fs::create_dir_all(&base).unwrap();
-
-        let server = build_test_server(
-            &base,
-            vec![vec![InputFile {
-                path: "src/main.rs".to_string(),
-                content: b"fn main() {\n    println!(\"hello\");\n}\n".to_vec(),
-                mtime: 100,
-            }]],
-        );
-
-        let params = GetFileParams {
-            path: "src/main.rs".to_string(),
-            repo: None,
-            start_line: None,
-            end_line: None,
-        };
-
-        let result = server.get_file(Parameters(params)).await.unwrap();
-
-        let text = result.content[0].as_text().unwrap().text.as_str();
-        assert!(text.contains("src/main.rs"));
-        assert!(text.contains("1 | fn main() {"));
-        assert!(text.contains("2 |     println!(\"hello\");"));
-        assert!(text.contains("3 | }"));
-    }
-
-    #[tokio::test]
-    async fn test_get_file_not_found() {
-        let dir = tempfile::tempdir().unwrap();
-        let base = dir.path().join("segments");
-        std::fs::create_dir_all(&base).unwrap();
-
-        let server = build_test_server(
-            &base,
-            vec![vec![InputFile {
-                path: "src/main.rs".to_string(),
-                content: b"fn main() {}".to_vec(),
-                mtime: 100,
-            }]],
-        );
-
-        let params = GetFileParams {
-            path: "nonexistent.rs".to_string(),
-            repo: None,
-            start_line: None,
-            end_line: None,
-        };
-
-        let result = server.get_file(Parameters(params)).await.unwrap();
-
-        assert_eq!(result.is_error, Some(true));
-        let text = result.content[0].as_text().unwrap().text.as_str();
-        assert!(text.contains("not found"));
-    }
-
-    #[tokio::test]
-    async fn test_get_file_line_range() {
-        let dir = tempfile::tempdir().unwrap();
-        let base = dir.path().join("segments");
-        std::fs::create_dir_all(&base).unwrap();
-
-        let content = (1..=20)
-            .map(|i| format!("line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let server = build_test_server(
-            &base,
-            vec![vec![InputFile {
-                path: "big.txt".to_string(),
-                content: content.into_bytes(),
-                mtime: 100,
-            }]],
-        );
-
-        let params = GetFileParams {
-            path: "big.txt".to_string(),
-            repo: None,
-            start_line: Some(5),
-            end_line: Some(10),
-        };
-
-        let result = server.get_file(Parameters(params)).await.unwrap();
-
-        let text = result.content[0].as_text().unwrap().text.as_str();
-        assert!(text.contains("lines 5-10 of 20"));
-        assert!(text.contains(" 5 | line 5"));
-        assert!(text.contains("10 | line 10"));
-        assert!(!text.contains(" 4 | line 4"));
-        assert!(!text.contains("11 | line 11"));
-    }
-
-    #[tokio::test]
-    async fn test_get_file_start_line_zero() {
-        let dir = tempfile::tempdir().unwrap();
-        let base = dir.path().join("segments");
-        std::fs::create_dir_all(&base).unwrap();
-
-        let server = build_test_server(
-            &base,
-            vec![vec![InputFile {
-                path: "a.rs".to_string(),
-                content: b"fn a() {}".to_vec(),
-                mtime: 100,
-            }]],
-        );
-
-        let params = GetFileParams {
-            path: "a.rs".to_string(),
-            repo: None,
-            start_line: Some(0),
-            end_line: None,
-        };
-
-        let result = server.get_file(Parameters(params)).await.unwrap();
-
-        assert_eq!(result.is_error, Some(true));
-        let text = result.content[0].as_text().unwrap().text.as_str();
-        assert!(text.contains("start_line"));
-        assert!(text.contains("must be >= 1"));
-    }
-
-    #[tokio::test]
-    async fn test_get_file_end_line_before_start() {
-        let dir = tempfile::tempdir().unwrap();
-        let base = dir.path().join("segments");
-        std::fs::create_dir_all(&base).unwrap();
-
-        let server = build_test_server(
-            &base,
-            vec![vec![InputFile {
-                path: "a.rs".to_string(),
-                content: b"line1\nline2\nline3\n".to_vec(),
-                mtime: 100,
-            }]],
-        );
-
-        let params = GetFileParams {
-            path: "a.rs".to_string(),
-            repo: None,
-            start_line: Some(3),
-            end_line: Some(1),
-        };
-
-        let result = server.get_file(Parameters(params)).await.unwrap();
-
-        assert_eq!(result.is_error, Some(true));
-        let text = result.content[0].as_text().unwrap().text.as_str();
-        assert!(text.contains("end_line"));
-        assert!(text.contains("must be >= start_line"));
-    }
-
-    #[tokio::test]
-    async fn test_get_file_truncation_at_500_lines() {
-        let dir = tempfile::tempdir().unwrap();
-        let base = dir.path().join("segments");
-        std::fs::create_dir_all(&base).unwrap();
-
-        let content = (1..=600)
-            .map(|i| format!("line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let server = build_test_server(
-            &base,
-            vec![vec![InputFile {
-                path: "big.rs".to_string(),
-                content: content.into_bytes(),
-                mtime: 100,
-            }]],
-        );
-
-        let params = GetFileParams {
-            path: "big.rs".to_string(),
-            repo: None,
-            start_line: None,
-            end_line: None,
-        };
-
-        let result = server.get_file(Parameters(params)).await.unwrap();
-
-        let text = result.content[0].as_text().unwrap().text.as_str();
-        assert!(text.contains("lines 1-500 of 600"));
-        assert!(text.contains("truncated"));
-    }
-
-    #[tokio::test]
-    async fn test_get_file_empty_index() {
-        let state = Arc::new(IndexState::new());
-        let server = IndexrsServer::new(state, None, None);
-
-        let params = GetFileParams {
-            path: "anything.rs".to_string(),
-            repo: None,
-            start_line: None,
-            end_line: None,
-        };
-
-        let result = server.get_file(Parameters(params)).await.unwrap();
-
-        assert_eq!(result.is_error, Some(true));
-        let text = result.content[0].as_text().unwrap().text.as_str();
-        assert!(text.contains("not found"));
-    }
-
-    #[tokio::test]
-    async fn test_get_file_start_line_beyond_eof() {
-        let dir = tempfile::tempdir().unwrap();
-        let base = dir.path().join("segments");
-        std::fs::create_dir_all(&base).unwrap();
-
-        let server = build_test_server(
-            &base,
-            vec![vec![InputFile {
-                path: "short.rs".to_string(),
-                content: b"line1\nline2\n".to_vec(),
-                mtime: 100,
-            }]],
-        );
-
-        let params = GetFileParams {
-            path: "short.rs".to_string(),
-            repo: None,
-            start_line: Some(100),
-            end_line: None,
-        };
-
-        let result = server.get_file(Parameters(params)).await.unwrap();
-
-        assert_eq!(result.is_error, Some(true));
-        let text = result.content[0].as_text().unwrap().text.as_str();
-        assert!(text.contains("exceeds file length"));
-    }
-
-    #[tokio::test]
-    async fn test_get_file_dedup_across_segments() {
-        let dir = tempfile::tempdir().unwrap();
-        let base = dir.path().join("segments");
-        std::fs::create_dir_all(&base).unwrap();
-
-        let server = build_test_server(
-            &base,
-            vec![
-                vec![InputFile {
-                    path: "file.rs".to_string(),
-                    content: b"old content".to_vec(),
-                    mtime: 100,
-                }],
-                vec![InputFile {
-                    path: "file.rs".to_string(),
-                    content: b"new content".to_vec(),
-                    mtime: 200,
-                }],
-            ],
-        );
-
-        let params = GetFileParams {
-            path: "file.rs".to_string(),
-            repo: None,
-            start_line: None,
-            end_line: None,
-        };
-
-        let result = server.get_file(Parameters(params)).await.unwrap();
-
-        let text = result.content[0].as_text().unwrap().text.as_str();
-        assert!(text.contains("new content"));
-        assert!(!text.contains("old content"));
     }
 
     // ---- index_status integration tests ----
