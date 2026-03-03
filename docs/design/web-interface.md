@@ -2,6 +2,8 @@
 
 This document covers the REST API and web UI for indexrs. The web interface is designed for local use by a single developer -- it should feel fast, lightweight, and keyboard-driven.
 
+IMPORTANT: make sure every dependency added here is up to date!
+
 ## Technology Choices
 
 ### Backend: axum
@@ -11,8 +13,8 @@ axum is the right choice for a local dev tool:
 - **Lightweight** -- no macros, no ORM, just functions. Compiles fast relative to alternatives like actix-web.
 - **Tower middleware ecosystem** -- compression, CORS, tracing come free via tower-http.
 - **First-class SSE support** -- `axum::response::Sse` for streaming search results.
-- **Shared state** -- `State` extractor makes it trivial to share the index handle across handlers.
-- **tokio-native** -- same runtime we'll use for file watching and MCP server.
+- **Shared state** -- `State` extractor makes it trivial to share the repo registry across handlers.
+- **tokio-native** -- same runtime we use for file watching and MCP server.
 
 We don't need actix-web's actor system or its performance edge (irrelevant for a local tool with one user).
 
@@ -26,9 +28,44 @@ No build step. No node_modules. The entire frontend ships as static files embedd
 
 This keeps the binary self-contained. No external CDN dependencies -- everything works offline.
 
+### Templates: askama
+
+Server-side HTML fragment rendering uses askama (Jinja2-like templates). Template files live alongside the static assets, separate from Rust code. This makes it easy to iterate on the UI without recompiling handler logic. askama templates are compile-time checked, so broken templates fail the build.
+
 ### Why not GraphQL?
 
 GraphQL adds complexity (schema definitions, resolver boilerplate, client library) for no benefit here. We have a small number of well-defined endpoints. REST with JSON is simpler and sufficient. The search endpoint is the only "complex" query, and it maps naturally to query parameters.
+
+---
+
+## Architecture
+
+### Proxy model: web server talks to per-repo daemons
+
+The web server does **not** own `SegmentManager` instances. Instead, it proxies all search, file, and index operations to the existing per-repo daemons over Unix sockets. This avoids divergence between the daemon and web server (two `SegmentManager` instances fighting over the same `.indexrs/` directory) and gets mutual exclusion for free via the daemon's internal writer mutex.
+
+```
+Browser → HTTP → Web Server → Unix Socket → Daemon → SegmentManager
+                  (axum)        (per repo)    (owns index)
+
+CLI ─────────────────────────→ Unix Socket → Daemon → SegmentManager
+                                (unchanged)
+```
+
+On startup, the web server reads the repo registry config (`~/.config/indexrs/repos.toml`, see `docs/design/multi-repo.md`) and calls `ensure_daemon()` for each registered repo. The web server holds a map of `repo_name → repo_root` and opens a new Unix socket connection per request.
+
+The CLI is unaffected -- it continues to auto-start its own per-repo daemon via `ensure_daemon()` as it does today.
+
+### Daemon protocol extensions
+
+The existing daemon protocol returns pre-formatted text lines (`DaemonResponse::Line`), which works for the CLI but not for the web server. New structured request/response variants are added alongside the existing ones (see `docs/design/multi-repo.md` § Daemon Protocol Extensions for the full spec):
+
+- `JsonSearch` → returns `Json` frames with serialized `FileMatch` objects
+- `GetFile` → returns file content with metadata
+- `Status` → returns structured index status (file count, languages, segments)
+- `Health` → returns version, uptime
+
+The existing CLI-oriented `Search`/`QuerySearch`/`Files` variants are unchanged.
 
 ---
 
@@ -49,7 +86,7 @@ All endpoints are prefixed with `/api/v1`. The API returns JSON with `Content-Ty
 
 ### Search
 
-#### `GET /api/v1/search`
+#### `GET /api/v1/repos/{name}/search`
 
 The primary endpoint. Supports the same query syntax as the CLI and MCP interfaces.
 
@@ -61,8 +98,9 @@ The primary endpoint. Supports the same query syntax as the CLI and MCP interfac
 | `page`      | integer | 1       | Page number (1-indexed) |
 | `per_page`  | integer | 25      | Results per page (max 100) |
 | `context`   | integer | 2       | Lines of context above/below match |
-| `repos`     | string  | all     | Comma-separated repo names to search |
 | `stats_only`| boolean | false   | Return only match count, no results |
+
+The `repo` is determined by the path prefix: `/api/v1/repos/{name}/search`. There is no cross-repo search -- each search targets exactly one repo.
 
 **Query Syntax:**
 
@@ -146,9 +184,9 @@ Results are grouped by file. Within each file, matches are sorted by line number
 | `400`  | Invalid query syntax, invalid parameter values |
 | `503`  | Index not ready (still building) |
 
-#### `GET /api/v1/search/stream`
+#### `GET /api/v1/repos/{name}/search/stream`
 
-Same parameters as `/api/v1/search`, but returns results as Server-Sent Events. This is used by the UI for live-as-you-type search, so the user sees results appearing as the backend finds them rather than waiting for the full result set.
+Same parameters as the search endpoint, but returns results as Server-Sent Events. This is used by the UI for live-as-you-type search, so the user sees results appearing as the backend finds them rather than waiting for the full result set.
 
 Each SSE event:
 
@@ -170,7 +208,7 @@ The stream emits `result` events as files are matched, then a final `stats` even
 
 ### File Retrieval
 
-#### `GET /api/v1/files/{repo}/{path...}`
+#### `GET /api/v1/repos/{name}/files/{path...}`
 
 Retrieve a single file's contents with syntax highlighting metadata.
 
@@ -215,9 +253,9 @@ The `tokens` array provides character offsets for syntax highlighting. The UI re
 
 ### Index Management
 
-#### `GET /api/v1/index/status`
+#### `GET /api/v1/repos/{name}/status`
 
-Returns the current state of the index.
+Returns the current state of the index for a specific repo.
 
 **Response: `200 OK`**
 
@@ -245,9 +283,9 @@ Returns the current state of the index.
 
 The `status` field is one of: `ready`, `indexing`, `error`.
 
-#### `GET /api/v1/index/status/stream`
+#### `GET /api/v1/repos/{name}/status/stream`
 
-SSE stream for live index status updates. The UI uses this to show a progress indicator during reindexing.
+SSE stream for live index status updates for a specific repo. The UI uses this to show a progress indicator during reindexing.
 
 ```
 event: status
@@ -257,32 +295,24 @@ event: status
 data: {"status":"ready","repos":[...]}
 ```
 
-#### `POST /api/v1/index/refresh`
+#### `POST /api/v1/repos/{name}/refresh`
 
-Trigger a manual reindex. Normally the file watcher handles this, but this endpoint exists for when you want to force it.
+Trigger a manual reindex for a specific repo. Normally the file watcher handles this, but this endpoint exists for when you want to force it.
 
-**Request Body (optional):**
-
-```json
-{
-  "repos": ["indexrs"]
-}
-```
-
-If `repos` is omitted, all repos are reindexed.
+**Request Body:** none required.
 
 **Response: `202 Accepted`**
 
 ```json
 {
   "message": "Reindex started",
-  "repos": ["indexrs"]
+  "repo": "indexrs"
 }
 ```
 
 #### `GET /api/v1/repos`
 
-List configured repositories.
+List registered repositories (from `~/.config/indexrs/repos.toml`). Includes live status from each repo's daemon.
 
 **Response: `200 OK`**
 
@@ -292,15 +322,24 @@ List configured repositories.
     {
       "name": "indexrs",
       "path": "/Users/howard/src/indexrs",
-      "status": "ready"
+      "status": "ready",
+      "files_indexed": 156
+    },
+    {
+      "name": "frontend",
+      "path": "/Users/howard/src/frontend",
+      "status": "indexing",
+      "files_indexed": 0
     }
   ]
 }
 ```
 
+The `status` field is derived by sending a `Status` request to the repo's daemon. If the daemon is unreachable, status is `"offline"`.
+
 #### `POST /api/v1/repos`
 
-Add a repository to the index.
+Register a repository. Writes to the config file and starts a daemon for it.
 
 **Request Body:**
 
@@ -311,15 +350,15 @@ Add a repository to the index.
 }
 ```
 
-If `name` is omitted, the directory name is used.
+If `name` is omitted, the directory name is used. The repo must already be initialized (`indexrs init`).
 
 **Response: `201 Created`**
 
-Returns the repo object. Indexing begins immediately in the background.
+Returns the repo object.
 
 #### `DELETE /api/v1/repos/{name}`
 
-Remove a repository from the index.
+Unregister a repository. Removes from the config file. Does not delete index data.
 
 **Response: `204 No Content`**
 
@@ -358,7 +397,7 @@ The UI has two views: Search (default) and File Preview.
 
 ```
 +----------------------------------------------------------------------+
-| indexrs                                          [ready] [2 repos]   |
+| indexrs                           [v indexrs ▾] [ready] [2 repos]    |
 +----------------------------------------------------------------------+
 | [/ ] Search: language:rust fn handle_______________|                 |
 |      [Rust] [x]  [path:src/] [x]                                    |
@@ -395,7 +434,7 @@ The UI has two views: Search (default) and File Preview.
 
 Key elements:
 
-- **Header bar** -- app name, index status badge (green dot = ready, yellow = indexing, red = error), repo count.
+- **Header bar** -- app name, **repo switcher dropdown** (switches all search/file operations to the selected repo), index status badge (green dot = ready, yellow = indexing, red = error), repo count.
 - **Search bar** -- full width, always focused on page load. Accepts the full query syntax. `/` to focus from anywhere.
 - **Active filters** -- parsed out of the query and shown as removable chips below the search bar. Clicking a chip removes it from the query. Clicking a language name in results adds it as a filter.
 - **Stats line** -- match count, file count, search duration. Updates live during SSE streaming.
@@ -556,10 +595,10 @@ Static files (CSS, JS, htmx library) are served with `Cache-Control: public, max
 
 The web server has two response modes for search:
 
-1. **JSON API** (`/api/v1/search`) -- used by the MCP server, CLI, and any external consumers.
+1. **JSON API** (`/api/v1/repos/{name}/search`) -- used by external consumers.
 2. **HTML fragments** (`/search-results`) -- used by htmx for the web UI. These are internal endpoints, not part of the public API.
 
-Both call the same underlying search function. The HTML rendering uses simple Rust templates (askama or maud) to produce fragments. This avoids duplicating search logic.
+Both send a `JsonSearch` request to the per-repo daemon over Unix socket and receive structured `FileMatch` data. The JSON API serializes it directly; the HTML path renders it through askama templates. Search logic lives entirely in the daemon -- the web server is a stateless proxy.
 
 ### Embedded static files
 
@@ -585,10 +624,15 @@ This keeps deployment to a single binary. No separate static file directory to m
 
 ### Server startup
 
-The web server binds to `127.0.0.1` only (not `0.0.0.0`) since this is a local tool. Default port is `4040` (configurable). On startup it prints:
+The web server binds to `127.0.0.1` only (not `0.0.0.0`) since this is a local tool. Default port is `4040` (configurable). On startup it:
+
+1. Reads the repo registry from `~/.config/indexrs/repos.toml`
+2. Calls `ensure_daemon()` for each registered repo (auto-starts daemons as needed)
+3. Prints startup info:
 
 ```
 indexrs web interface: http://localhost:4040
+  repos: indexrs, frontend (2 repos)
 ```
 
 ### axum router sketch
@@ -612,15 +656,20 @@ fn app(state: AppState) -> Router {
 
 fn api_router() -> Router<AppState> {
     Router::new()
-        .route("/search", get(api::search))
-        .route("/search/stream", get(api::search_stream))
-        .route("/files/{repo}/{*path}", get(api::get_file))
-        .route("/index/status", get(api::index_status))
-        .route("/index/status/stream", get(api::index_status_stream))
-        .route("/index/refresh", post(api::refresh_index))
+        // Repo-scoped endpoints (all search/file/index ops target one repo)
+        .route("/repos/{name}/search", get(api::search))
+        .route("/repos/{name}/search/stream", get(api::search_stream))
+        .route("/repos/{name}/files/{*path}", get(api::get_file))
+        .route("/repos/{name}/status", get(api::index_status))
+        .route("/repos/{name}/status/stream", get(api::index_status_stream))
+        .route("/repos/{name}/refresh", post(api::refresh_index))
+
+        // Repo management
         .route("/repos", get(api::list_repos))
         .route("/repos", post(api::add_repo))
         .route("/repos/{name}", delete(api::remove_repo))
+
+        // Global
         .route("/health", get(api::health))
 }
 ```
