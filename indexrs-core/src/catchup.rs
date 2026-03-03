@@ -105,7 +105,19 @@ fn try_git_catchup(
     let cp = checkpoint.as_ref()?;
     let git_commit = cp.git_commit.as_ref()?;
 
-    let mut git = GitChangeDetector::new(repo_root.to_path_buf());
+    let git = GitChangeDetector::new(repo_root.to_path_buf());
+
+    // Fast path: if checkpoint SHA matches HEAD and working tree is clean,
+    // skip the expensive 3-way git diff entirely.
+    if let Ok(head) = git.get_head_sha()
+        && head == *git_commit
+        && git.is_working_tree_clean()
+    {
+        tracing::debug!("checkpoint matches HEAD and tree is clean, skipping git diff");
+        return Some(Ok(Vec::new()));
+    }
+
+    let mut git = git;
     git.set_last_indexed_commit(git_commit.clone());
     Some(git.detect_changes())
 }

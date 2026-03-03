@@ -60,6 +60,15 @@ impl GitChangeDetector {
         Ok(output.trim().to_string())
     }
 
+    /// Check if the working tree is clean (no staged, unstaged, or untracked changes).
+    ///
+    /// Uses `git status --porcelain` which outputs nothing when clean.
+    pub fn is_working_tree_clean(&self) -> bool {
+        self.run_git(&["status", "--porcelain"])
+            .map(|output| output.trim().is_empty())
+            .unwrap_or(false)
+    }
+
     /// Detect all file changes and return them as [`ChangeEvent`] values.
     ///
     /// The events are de-duplicated by path: if the same path appears in
@@ -441,6 +450,40 @@ mod tests {
         assert!(
             sha.chars().all(|c| c.is_ascii_hexdigit()),
             "sha should be hex: {sha}"
+        );
+    }
+
+    #[test]
+    fn test_is_working_tree_clean_in_clean_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+
+        // Init a git repo with an initial commit.
+        for (cmd, args) in [
+            ("git", vec!["init"]),
+            ("git", vec!["config", "user.name", "test"]),
+            ("git", vec!["config", "user.email", "test@test.com"]),
+            ("git", vec!["commit", "--allow-empty", "-m", "init"]),
+        ] {
+            let out = std::process::Command::new(cmd)
+                .args(&args)
+                .current_dir(path)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{cmd} {:?} failed", args);
+        }
+
+        let detector = GitChangeDetector::new(path.to_path_buf());
+        assert!(
+            detector.is_working_tree_clean(),
+            "freshly init'd repo should be clean"
+        );
+
+        // Add a file — tree should now be dirty.
+        std::fs::write(path.join("dirty.txt"), "hello").unwrap();
+        assert!(
+            !detector.is_working_tree_clean(),
+            "repo with untracked file should not be clean"
         );
     }
 
