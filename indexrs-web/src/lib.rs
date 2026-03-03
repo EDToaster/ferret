@@ -1,3 +1,8 @@
+pub mod api;
+pub mod error;
+pub mod proxy;
+pub mod sse;
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -7,7 +12,7 @@ use std::time::Instant;
 use axum::Router;
 use axum::extract::State;
 use axum::response::Json;
-use axum::routing::get;
+use axum::routing::{delete, get, post};
 use serde::Serialize;
 use tokio::sync::RwLock;
 
@@ -78,8 +83,18 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
 }
 
 /// Build the full axum router. Agents A, B, C will add routes here.
-fn build_router(state: AppState) -> Router {
-    let api = Router::new().route("/health", get(health));
+pub fn build_router(state: AppState) -> Router {
+    let api = Router::new()
+        .route("/health", get(health))
+        .route("/repos/{name}/search", get(api::search))
+        .route("/repos/{name}/files/{*path}", get(api::get_file))
+        .route("/repos/{name}/status", get(api::index_status))
+        .route("/repos/{name}/refresh", post(api::refresh_index))
+        .route("/repos", get(api::list_repos))
+        .route("/repos", post(api::add_repo))
+        .route("/repos/{name}", delete(api::remove_repo))
+        .route("/repos/{name}/search/stream", get(sse::search_stream))
+        .route("/repos/{name}/status/stream", get(sse::status_stream));
 
     Router::new().nest("/api/v1", api).with_state(state)
 }
