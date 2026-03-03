@@ -1,4 +1,5 @@
-/target
-/.claude
-.indexrs
-.worktrees
+**/target/
+**/.claude/
+**/.playwright-mcp/
+**/.indexrs/
+**/.worktrees/
