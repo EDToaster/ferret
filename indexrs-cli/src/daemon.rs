@@ -12,8 +12,11 @@ use indexrs_core::checkpoint::{Checkpoint, write_checkpoint};
 use indexrs_core::error::IndexError;
 use indexrs_core::git_diff::GitChangeDetector;
 use indexrs_core::search::MatchPattern;
+use indexrs_core::types::FileId;
 
-use indexrs_daemon::json_protocol::{JsonSearchFrame, SearchStats};
+use indexrs_daemon::json_protocol::{
+    FileResponse, HealthResponse, JsonSearchFrame, SearchStats, StatusResponse,
+};
 pub use indexrs_daemon::{DaemonRequest, DaemonResponse};
 
 use crate::args::SortOrder;
@@ -164,6 +167,8 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
         });
     }
 
+    let daemon_start = Instant::now();
+
     loop {
         match timeout(IDLE_TIMEOUT, listener.accept()).await {
             Ok(Ok((stream, _))) => {
@@ -172,7 +177,9 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
                 let repo = repo_root.to_path_buf();
                 let idir = indexrs_dir.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, &mgr, &cu, &repo, &idir).await {
+                    if let Err(e) =
+                        handle_connection(stream, &mgr, &cu, &repo, &idir, daemon_start).await
+                    {
                         eprintln!("daemon: connection error: {e}");
                     }
                 });
@@ -324,6 +331,7 @@ async fn handle_connection(
     caught_up: &AtomicBool,
     repo_root: &Path,
     indexrs_dir: &Path,
+    daemon_start: Instant,
 ) -> Result<(), IndexError> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
@@ -799,19 +807,145 @@ async fn handle_connection(
                 .await
                 .map_err(IndexError::Io)?;
             }
-            req @ (DaemonRequest::GetFile { .. }
-            | DaemonRequest::Status
-            | DaemonRequest::Health) => {
-                let type_name = match req {
-                    DaemonRequest::GetFile { .. } => "GetFile",
-                    DaemonRequest::Status => "Status",
-                    DaemonRequest::Health => "Health",
-                    _ => unreachable!(),
+            DaemonRequest::GetFile {
+                path,
+                line_start,
+                line_end,
+            } => {
+                let snapshot = manager.snapshot();
+
+                // Search segments newest-first for a file matching the path.
+                let mut found = None;
+                for seg in snapshot.iter().rev() {
+                    let tombstones = seg.load_tombstones()?;
+                    let meta_reader = seg.metadata_reader();
+                    let count = seg.entry_count();
+                    for i in 0..count {
+                        let fid = FileId(i);
+                        if tombstones.contains(fid) {
+                            continue;
+                        }
+                        if let Some(entry) = meta_reader.get(fid)?
+                            && entry.path == path
+                        {
+                            found = Some((seg.clone(), entry));
+                            break;
+                        }
+                    }
+                    if found.is_some() {
+                        break;
+                    }
+                }
+
+                if let Some((seg, entry)) = found {
+                    let content_bytes = seg
+                        .content_reader()
+                        .read_content(entry.content_offset, entry.content_len)?;
+                    let content = String::from_utf8_lossy(&content_bytes);
+                    let all_lines: Vec<&str> = content.lines().collect();
+                    let total_lines = all_lines.len();
+
+                    let start = line_start.unwrap_or(1).max(1);
+                    let end = line_end.unwrap_or(total_lines).min(total_lines);
+
+                    let lines: Vec<String> = if start <= end && start <= total_lines {
+                        all_lines[(start - 1)..end]
+                            .iter()
+                            .map(|l| l.to_string())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+
+                    let resp = FileResponse {
+                        path: entry.path,
+                        language: entry.language.to_string(),
+                        total_lines,
+                        lines,
+                    };
+                    let payload = serde_json::to_string(&resp)
+                        .map_err(|e| IndexError::Io(std::io::Error::other(e)))?;
+                    wire::write_response(&mut writer, &DaemonResponse::Json { payload })
+                        .await
+                        .map_err(IndexError::Io)?;
+                    wire::write_response(
+                        &mut writer,
+                        &DaemonResponse::Done {
+                            total: 1,
+                            duration_ms: 0,
+                            stale: !caught_up.load(Ordering::Relaxed),
+                        },
+                    )
+                    .await
+                    .map_err(IndexError::Io)?;
+                } else {
+                    wire::write_response(
+                        &mut writer,
+                        &DaemonResponse::Error {
+                            message: format!("file not found: {path}"),
+                        },
+                    )
+                    .await
+                    .map_err(IndexError::Io)?;
+                }
+            }
+            DaemonRequest::Status => {
+                let snapshot = manager.snapshot();
+                let mut files_indexed: usize = 0;
+                for seg in snapshot.iter() {
+                    let tombstones = seg.load_tombstones()?;
+                    let count = seg.entry_count();
+                    for i in 0..count {
+                        if !tombstones.contains(FileId(i)) {
+                            files_indexed += 1;
+                        }
+                    }
+                }
+
+                let status = if caught_up.load(Ordering::Relaxed) {
+                    "ready"
+                } else {
+                    "catching_up"
                 };
+
+                let resp = StatusResponse {
+                    status: status.to_string(),
+                    files_indexed,
+                    segments: snapshot.len(),
+                };
+                let payload = serde_json::to_string(&resp)
+                    .map_err(|e| IndexError::Io(std::io::Error::other(e)))?;
+                wire::write_response(&mut writer, &DaemonResponse::Json { payload })
+                    .await
+                    .map_err(IndexError::Io)?;
                 wire::write_response(
                     &mut writer,
-                    &DaemonResponse::Error {
-                        message: format!("{type_name} not yet implemented"),
+                    &DaemonResponse::Done {
+                        total: 1,
+                        duration_ms: 0,
+                        stale: !caught_up.load(Ordering::Relaxed),
+                    },
+                )
+                .await
+                .map_err(IndexError::Io)?;
+            }
+            DaemonRequest::Health => {
+                let resp = HealthResponse {
+                    status: "ok".to_string(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    uptime_seconds: daemon_start.elapsed().as_secs(),
+                };
+                let payload = serde_json::to_string(&resp)
+                    .map_err(|e| IndexError::Io(std::io::Error::other(e)))?;
+                wire::write_response(&mut writer, &DaemonResponse::Json { payload })
+                    .await
+                    .map_err(IndexError::Io)?;
+                wire::write_response(
+                    &mut writer,
+                    &DaemonResponse::Done {
+                        total: 1,
+                        duration_ms: 0,
+                        stale: false,
                     },
                 )
                 .await
