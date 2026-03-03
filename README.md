@@ -128,6 +128,29 @@ Both full names and common extensions work (`language:rust` and `lang:rs` are eq
 
 `rust`, `python`, `typescript`, `javascript`, `go`, `c`, `cpp`, `java`, `ruby`, `shell`, `markdown`, `yaml`, `toml`, `json`, `xml`, `html`, `css`, `scss`, `sass`, `sql`, `protobuf`, `dockerfile`, `hcl`, `kotlin`, `swift`, `scala`, `elixir`, `erlang`, `haskell`, `ocaml`, `lua`, `perl`, `r`, `dart`, `zig`, `nix`
 
+## Web interface
+
+indexrs includes a browser-based search UI powered by [htmx](https://htmx.org/). Start it with:
+
+```bash
+indexrs web              # default port 4040
+indexrs web --port 8080  # custom port
+```
+
+**Search-as-you-type** — results update live as you type, with match highlighting and file grouping:
+
+![Search results](resources/web-search-results.png)
+
+**File preview** — click any result to view the full file with line numbers and language detection:
+
+![File preview](resources/web-file-preview.png)
+
+**Keyboard-driven** — navigate entirely from the keyboard (`/` to focus, `j`/`k` to move, `Enter` to open, `?` for help):
+
+![Keyboard shortcuts](resources/web-keyboard-shortcuts.png)
+
+The web server is a stateless proxy — all search and file operations are forwarded to per-repo daemons over Unix sockets. It also exposes a JSON API at `/api/v1/` and SSE streaming endpoints for live search results and index status.
+
 ## Building
 
 ```bash
@@ -154,13 +177,16 @@ cargo fmt --all -- --check                # Format check
 | `indexrs status` | Show index stats (segment count, file count) |
 | `indexrs reindex` | Incremental reindex (`--full` for complete rebuild) |
 | `indexrs preview <file>` | Preview file contents with syntax highlighting |
+| `indexrs web` | Start the web interface (default port 4040) |
 
 ## Workspace crates
 
 | Crate | Description |
 |---|---|
 | `indexrs-core` | Library with all indexing, search, query parsing, and change detection logic |
-| `indexrs-cli` | CLI binary with daemon-backed search, file listing, index management, and MCP server (`indexrs mcp`) |
+| `indexrs-cli` | CLI binary with daemon-backed search, file listing, index management, MCP server, and web interface |
+| `indexrs-daemon` | Daemon protocol library — TLV wire format, Unix socket client helpers, structured JSON response types |
+| `indexrs-web` | Web interface library — axum server, htmx frontend, JSON API, SSE streaming, daemon proxy |
 
 ## Architecture
 
@@ -221,6 +247,7 @@ Three mechanisms feed changes into the segment manager:
 | M2: Directory walker, binary detection, file watcher, git change detection | Complete |
 | M3: Segments, tombstones, multi-segment query, compaction, crash recovery | Complete |
 | M4: Query parser, query planner, content verifier, relevance ranking | Complete |
+| Web: Browser UI, JSON API, SSE streaming, daemon proxy | Complete |
 
 ## License
 
