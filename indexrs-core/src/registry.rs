@@ -55,13 +55,13 @@ impl RepoConfig {
 
 /// Returns the default config file path: `~/.config/indexrs/repos.toml`.
 pub fn config_file_path() -> PathBuf {
-    let mut path = dirs_next().join("indexrs");
+    let mut path = config_dir().join("indexrs");
     path.push("repos.toml");
     path
 }
 
-/// Returns `~/.config` (or platform equivalent).
-fn dirs_next() -> PathBuf {
+/// Returns the user config directory (`$XDG_CONFIG_HOME` or `~/.config`).
+fn config_dir() -> PathBuf {
     // Use $XDG_CONFIG_HOME if set, otherwise ~/.config
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         return PathBuf::from(xdg);
@@ -96,7 +96,10 @@ pub fn save_config_to(path: &Path, config: &RepoConfig) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let contents = toml::to_string_pretty(config).map_err(|e| IndexError::Config(e.to_string()))?;
-    std::fs::write(path, contents)?;
+    // Atomic write: write to temp file, then rename into place (crash-safe).
+    let tmp_path = path.with_extension("toml.tmp");
+    std::fs::write(&tmp_path, contents)?;
+    std::fs::rename(&tmp_path, path)?;
     Ok(())
 }
 
