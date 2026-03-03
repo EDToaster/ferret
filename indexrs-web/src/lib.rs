@@ -2,6 +2,8 @@ pub mod api;
 pub mod error;
 pub mod proxy;
 pub mod sse;
+pub mod static_files;
+pub mod ui;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -96,7 +98,13 @@ pub fn build_router(state: AppState) -> Router {
         .route("/repos/{name}/search/stream", get(sse::search_stream))
         .route("/repos/{name}/status/stream", get(sse::status_stream));
 
-    Router::new().nest("/api/v1", api).with_state(state)
+    Router::new()
+        .route("/", get(ui::index))
+        .route("/search-results", get(ui::search_results_fragment))
+        .route("/file/{repo}/{*path}", get(ui::file_preview))
+        .route("/static/{*path}", get(static_files::static_handler))
+        .nest("/api/v1", api)
+        .with_state(state)
 }
 
 /// Start the web server on the given port.

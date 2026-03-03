@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ path }} - indexrs</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="header">
+        <h1>indexrs</h1>
+    </header>
+
+    <a href="/" class="back-link">&larr; Back to search</a>
+
+    <div class="file-preview-header">
+        <h2>{{ path }}</h2>
+        <div class="file-preview-meta">
+            {{ language }} &middot; {{ total_lines }} line{% if total_lines != 1 %}s{% endif %}
+        </div>
+    </div>
+
+    <div class="code-lines">
+    {% for line in &lines %}
+        <div class="code-line">
+            <span class="line-number">{{ line.0 }}</span>
+            <span class="line-content">{{ line.1 }}</span>
+        </div>
+    {% endfor %}
+    </div>
+
+    <script src="/static/htmx.min.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>

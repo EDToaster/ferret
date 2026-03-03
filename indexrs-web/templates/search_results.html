@@ -1,0 +1,61 @@
+{% if !files.is_empty() %}
+<div class="stats-line">
+    {{ total_matches }} match{% if total_matches != 1 %}es{% endif %} in {{ files_matched }} file{% if files_matched != 1 %}s{% endif %} ({{ duration_ms }}ms) &mdash; page {{ page }}/{{ total_pages }}
+</div>
+{% for file in &files %}
+<div class="file-result">
+    <div class="file-header">
+        <a href="/file/{{ repo }}/{{ file.path.display() }}" class="path">{{ file.path.display() }}</a>
+        <span class="lang">{{ file.language }}</span>
+        <span class="match-count">{{ file.lines.len() }} match{% if file.lines.len() != 1 %}es{% endif %}</span>
+    </div>
+    <div class="code-lines">
+    {% for line in &file.lines %}
+        {% for ctx in &line.context_before %}
+        <div class="code-line code-line--context">
+            <span class="line-number">{{ ctx.line_number }}</span>
+            <span class="line-content">{{ ctx.content }}</span>
+        </div>
+        {% endfor %}
+        <div class="code-line code-line--match">
+            <span class="line-number">{{ line.line_number }}</span>
+            <span class="line-content">{{ Self::highlight_line(&line.content, &line.ranges)|safe }}</span>
+        </div>
+        {% for ctx in &line.context_after %}
+        <div class="code-line code-line--context">
+            <span class="line-number">{{ ctx.line_number }}</span>
+            <span class="line-content">{{ ctx.content }}</span>
+        </div>
+        {% endfor %}
+    {% endfor %}
+    </div>
+</div>
+{% endfor %}
+{% if total_pages > 1 %}
+<div class="pagination">
+    {% if page > 1 %}
+    <a href="#" hx-get="/search-results?q={{ query }}&amp;repo-select={{ repo }}&amp;page={{ page - 1 }}" hx-target="#results">Prev</a>
+    {% else %}
+    <span class="disabled">Prev</span>
+    {% endif %}
+    <span class="current">{{ page }} / {{ total_pages }}</span>
+    {% if has_next %}
+    <a href="#" hx-get="/search-results?q={{ query }}&amp;repo-select={{ repo }}&amp;page={{ page + 1 }}" hx-target="#results">Next</a>
+    {% else %}
+    <span class="disabled">Next</span>
+    {% endif %}
+</div>
+{% endif %}
+{% else %}
+    {% if !query.is_empty() %}
+    <div class="empty-state">
+        <p>No results for "{{ query }}"</p>
+        <p class="hint">Try a different query or select another repository</p>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>Type to search across your codebase</p>
+        <p class="hint">Supports literal strings, "exact phrases", regex /patterns/, AND/OR/NOT, lang:rust, path:src/</p>
+    </div>
+    {% endif %}
+{% endif %}

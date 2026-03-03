@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>indexrs</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="header">
+        <h1>indexrs</h1>
+        {% if !repos.is_empty() %}
+        <select name="repo-select" id="repo-select" class="repo-select"
+                hx-get="/search-results" hx-trigger="change"
+                hx-target="#results" hx-include=".search-input">
+            {% for repo in &repos %}
+            <option value="{{ repo.name }}"{% if repo.name == selected_repo %} selected{% endif %}>{{ repo.name }}</option>
+            {% endfor %}
+        </select>
+        {% endif %}
+        <div class="header-spacer"></div>
+        <span class="badge badge--ok">{{ status }}</span>
+        <span class="badge">{{ repo_count }} repo{% if repo_count != 1 %}s{% endif %}</span>
+    </header>
+
+    <div class="search-bar">
+        <input type="search" name="q" class="search-input"
+               placeholder="Search code... (press / to focus, ? for help)"
+               autocomplete="off" autofocus
+               hx-get="/search-results"
+               hx-trigger="keyup changed delay:150ms, search"
+               hx-target="#results"
+               hx-include="#repo-select">
+        <span class="htmx-indicator"><span class="spinner"></span></span>
+    </div>
+
+    <div id="results" class="results">
+        <div class="empty-state">
+            <p>Type to search across your codebase</p>
+            <p class="hint">Supports literal strings, "exact phrases", regex /patterns/, AND/OR/NOT, lang:rust, path:src/</p>
+        </div>
+    </div>
+
+    <div class="help-overlay" id="help-overlay">
+        <div class="help-content">
+            <h2>Keyboard Shortcuts</h2>
+            <dl>
+                <dt>/</dt><dd>Focus search bar</dd>
+                <dt>Esc</dt><dd>Clear selection / blur input</dd>
+                <dt>j / k</dt><dd>Next / previous result</dd>
+                <dt>Enter</dt><dd>Open selected file</dd>
+                <dt>n / p</dt><dd>Next / previous page</dd>
+                <dt>q</dt><dd>Back to results</dd>
+                <dt>?</dt><dd>Toggle this help</dd>
+            </dl>
+        </div>
+    </div>
+
+    <script src="/static/htmx.min.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>
