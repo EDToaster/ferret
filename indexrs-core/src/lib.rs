@@ -23,6 +23,7 @@ pub mod query_trigrams;
 pub mod ranking;
 pub mod recovery;
 pub mod registry;
+pub mod reindex_progress;
 pub mod search;
 pub mod segment;
 pub mod segment_manager;
@@ -76,6 +77,7 @@ pub use registry::{
     RepoConfig, RepoEntry, add_repo, config_file_path, load_config, load_config_from, remove_repo,
     save_config, save_config_to,
 };
+pub use reindex_progress::ReindexProgress;
 pub use search::{
     ContextBlock, ContextLine, FileMatch, LineMatch, MatchPattern, SearchOptions, SearchResult,
 };
