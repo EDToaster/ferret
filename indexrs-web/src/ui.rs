@@ -66,6 +66,23 @@ impl SearchResultsTemplate {
     }
 }
 
+/// A repo entry for the repos overview page.
+pub struct RepoOverviewItem {
+    pub name: String,
+    pub path: String,
+    pub status: String,
+    pub files_indexed: usize,
+    pub segments: usize,
+    pub online: bool,
+}
+
+#[derive(Template)]
+#[template(path = "repos.html")]
+struct ReposTemplate {
+    repos: Vec<RepoOverviewItem>,
+    repo_count: usize,
+}
+
 #[derive(Template)]
 #[template(path = "file_preview.html")]
 struct FilePreviewTemplate {
@@ -181,10 +198,10 @@ async fn proxy_get_file(
         .map_err(|e| format!("parse file response: {e}"))
 }
 
-async fn proxy_status(
+async fn proxy_status_raw(
     daemon_bin: &std::path::Path,
     repo_path: &std::path::Path,
-) -> Result<String, String> {
+) -> Result<indexrs_daemon::StatusResponse, String> {
     let stream = indexrs_daemon::ensure_daemon(daemon_bin, repo_path)
         .await
         .map_err(|e| format!("daemon connect: {e}"))?;
@@ -198,13 +215,23 @@ async fn proxy_status(
     if let Some(payload) = result.payloads.first()
         && let Ok(status) = serde_json::from_str::<indexrs_daemon::StatusResponse>(payload)
     {
-        return Ok(format!(
-            "{} ({} files, {} segments)",
-            status.status, status.files_indexed, status.segments
-        ));
+        return Ok(status);
     }
 
-    Ok("unknown".to_string())
+    Err("no valid status response".to_string())
+}
+
+async fn proxy_status(
+    daemon_bin: &std::path::Path,
+    repo_path: &std::path::Path,
+) -> Result<String, String> {
+    match proxy_status_raw(daemon_bin, repo_path).await {
+        Ok(status) => Ok(format!(
+            "{} ({} files, {} segments)",
+            status.status, status.files_indexed, status.segments
+        )),
+        Err(_) => Ok("unknown".to_string()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -370,4 +397,32 @@ pub async fn file_preview(
             (StatusCode::BAD_GATEWAY, format!("Failed to load file: {e}")).into_response()
         }
     }
+}
+
+/// GET /repos — repo overview page
+pub async fn repos_page(State(state): State<AppState>) -> Response {
+    let repos_map = state.repos().await;
+    let mut repo_names: Vec<String> = repos_map.keys().cloned().collect();
+    repo_names.sort();
+
+    let mut repos = Vec::with_capacity(repo_names.len());
+    for name in &repo_names {
+        let path = repos_map[name].clone();
+        let (status, files_indexed, segments, online) =
+            match proxy_status_raw(state.daemon_bin(), &path).await {
+                Ok(sr) => (sr.status.clone(), sr.files_indexed, sr.segments, true),
+                Err(_) => ("offline".to_string(), 0, 0, false),
+            };
+        repos.push(RepoOverviewItem {
+            name: name.clone(),
+            path: path.display().to_string(),
+            status,
+            files_indexed,
+            segments,
+            online,
+        });
+    }
+
+    let repo_count = repos.len();
+    render_template(ReposTemplate { repos, repo_count })
 }
