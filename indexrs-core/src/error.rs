@@ -45,6 +45,10 @@ pub enum IndexError {
     /// An error occurred in the filesystem watcher.
     #[error("watcher error: {0}")]
     Watcher(String),
+
+    /// An error occurred parsing or writing a configuration file.
+    #[error("config error: {0}")]
+    Config(String),
 }
 
 /// Convenience type alias for `std::result::Result<T, IndexError>`.

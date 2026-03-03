@@ -21,6 +21,7 @@ pub mod query_plan;
 pub mod query_trigrams;
 pub mod ranking;
 pub mod recovery;
+pub mod registry;
 pub mod search;
 pub mod segment;
 pub mod segment_manager;
@@ -69,6 +70,10 @@ pub use query_trigrams::{
 };
 pub use ranking::{MatchType, RankingConfig, ScoringInput, score_file_match};
 pub use recovery::{cleanup_lock_file, recover_segments};
+pub use registry::{
+    RepoConfig, RepoEntry, add_repo, config_file_path, load_config, load_config_from, remove_repo,
+    save_config, save_config_to,
+};
 pub use search::{
     ContextBlock, ContextLine, FileMatch, LineMatch, MatchPattern, SearchOptions, SearchResult,
 };
