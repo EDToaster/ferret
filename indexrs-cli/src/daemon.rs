@@ -1920,4 +1920,424 @@ mod tests {
             .unwrap();
         let _ = tokio::time::timeout(Duration::from_secs(2), daemon_handle).await;
     }
+
+    #[tokio::test]
+    async fn test_daemon_json_search_request() {
+        use indexrs_core::segment::InputFile;
+        use indexrs_daemon::json_protocol::JsonSearchFrame;
+
+        let dir = tempfile::tempdir().unwrap();
+        let indexrs_dir = dir.path().join(".indexrs");
+        std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        // Write source files to disk so background catch-up doesn't tombstone them.
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/main.rs"),
+            b"fn main() { println!(\"hello\"); }\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), b"pub fn hello() {}\n").unwrap();
+
+        // Build index.
+        let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+        manager
+            .index_files(vec![
+                InputFile {
+                    path: "src/main.rs".to_string(),
+                    content: b"fn main() { println!(\"hello\"); }\n".to_vec(),
+                    mtime: 100,
+                },
+                InputFile {
+                    path: "src/lib.rs".to_string(),
+                    content: b"pub fn hello() {}\n".to_vec(),
+                    mtime: 200,
+                },
+            ])
+            .unwrap();
+        drop(manager);
+
+        // Start daemon.
+        let repo_root = dir.path().to_path_buf();
+        let repo_root_clone = repo_root.clone();
+        let daemon_handle = tokio::spawn(async move {
+            start_daemon(&repo_root_clone).await.unwrap();
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Connect.
+        let stream = try_connect(&repo_root).await.expect("should connect");
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        // Send JsonSearch request.
+        let req = serde_json::to_string(&DaemonRequest::JsonSearch {
+            query: "hello".to_string(),
+            page: 1,
+            per_page: 25,
+            context_lines: 0,
+            language: None,
+            path_glob: None,
+        })
+        .unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+
+        // Read responses: collect Json frames, expect a Done frame.
+        let mut json_payloads = Vec::new();
+        loop {
+            let resp = crate::wire::read_response(&mut reader).await.unwrap();
+            match resp {
+                DaemonResponse::Json { payload } => {
+                    json_payloads.push(payload);
+                }
+                DaemonResponse::Done { .. } => {
+                    break;
+                }
+                other => panic!("unexpected response: {other:?}"),
+            }
+        }
+
+        // Validate: at least one Result frame and one Stats frame.
+        let mut has_result = false;
+        let mut has_stats_with_matches = false;
+        for payload in &json_payloads {
+            let frame: JsonSearchFrame = serde_json::from_str(payload).unwrap_or_else(|e| {
+                panic!("failed to parse JsonSearchFrame: {e}, payload: {payload}")
+            });
+            match frame {
+                JsonSearchFrame::Result { .. } => {
+                    has_result = true;
+                }
+                JsonSearchFrame::Stats { stats } => {
+                    if stats.total_matches > 0 {
+                        has_stats_with_matches = true;
+                    }
+                }
+            }
+        }
+        assert!(has_result, "expected at least one Result frame");
+        assert!(
+            has_stats_with_matches,
+            "expected Stats frame with total_matches > 0"
+        );
+
+        // Shutdown.
+        let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(2), daemon_handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_daemon_status_request() {
+        use indexrs_core::segment::InputFile;
+        use indexrs_daemon::json_protocol::StatusResponse;
+
+        let dir = tempfile::tempdir().unwrap();
+        let indexrs_dir = dir.path().join(".indexrs");
+        std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        // Write source files to disk so background catch-up doesn't tombstone them.
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/main.rs"),
+            b"fn main() { println!(\"hello\"); }\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), b"pub fn hello() {}\n").unwrap();
+
+        // Build index.
+        let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+        manager
+            .index_files(vec![
+                InputFile {
+                    path: "src/main.rs".to_string(),
+                    content: b"fn main() { println!(\"hello\"); }\n".to_vec(),
+                    mtime: 100,
+                },
+                InputFile {
+                    path: "src/lib.rs".to_string(),
+                    content: b"pub fn hello() {}\n".to_vec(),
+                    mtime: 200,
+                },
+            ])
+            .unwrap();
+        drop(manager);
+
+        // Start daemon.
+        let repo_root = dir.path().to_path_buf();
+        let repo_root_clone = repo_root.clone();
+        let daemon_handle = tokio::spawn(async move {
+            start_daemon(&repo_root_clone).await.unwrap();
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Connect.
+        let stream = try_connect(&repo_root).await.expect("should connect");
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        // Send Status request.
+        let req = serde_json::to_string(&DaemonRequest::Status).unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+
+        // Read responses: expect a Json frame then Done.
+        let mut json_payload = None;
+        loop {
+            let resp = crate::wire::read_response(&mut reader).await.unwrap();
+            match resp {
+                DaemonResponse::Json { payload } => {
+                    json_payload = Some(payload);
+                }
+                DaemonResponse::Done { .. } => {
+                    break;
+                }
+                other => panic!("unexpected response: {other:?}"),
+            }
+        }
+
+        let payload = json_payload.expect("expected a Json frame for Status");
+        let status: StatusResponse = serde_json::from_str(&payload)
+            .unwrap_or_else(|e| panic!("failed to parse StatusResponse: {e}, payload: {payload}"));
+        assert!(
+            status.files_indexed > 0,
+            "expected files_indexed > 0, got {}",
+            status.files_indexed
+        );
+        assert!(
+            status.segments > 0,
+            "expected segments > 0, got {}",
+            status.segments
+        );
+
+        // Shutdown.
+        let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(2), daemon_handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_daemon_health_request() {
+        use indexrs_daemon::json_protocol::HealthResponse;
+
+        let dir = tempfile::tempdir().unwrap();
+        let indexrs_dir = dir.path().join(".indexrs");
+        std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        // Start daemon (no files needed for health check).
+        let repo_root = dir.path().to_path_buf();
+        let repo_root_clone = repo_root.clone();
+        let daemon_handle = tokio::spawn(async move {
+            start_daemon(&repo_root_clone).await.unwrap();
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Connect.
+        let stream = try_connect(&repo_root).await.expect("should connect");
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        // Send Health request.
+        let req = serde_json::to_string(&DaemonRequest::Health).unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+
+        // Read responses: expect a Json frame then Done.
+        let mut json_payload = None;
+        loop {
+            let resp = crate::wire::read_response(&mut reader).await.unwrap();
+            match resp {
+                DaemonResponse::Json { payload } => {
+                    json_payload = Some(payload);
+                }
+                DaemonResponse::Done { .. } => {
+                    break;
+                }
+                other => panic!("unexpected response: {other:?}"),
+            }
+        }
+
+        let payload = json_payload.expect("expected a Json frame for Health");
+        let health: HealthResponse = serde_json::from_str(&payload)
+            .unwrap_or_else(|e| panic!("failed to parse HealthResponse: {e}, payload: {payload}"));
+        assert_eq!(health.status, "ok");
+        assert!(
+            !health.version.is_empty(),
+            "expected non-empty version string"
+        );
+
+        // Shutdown.
+        let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(2), daemon_handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_daemon_get_file_request() {
+        use indexrs_core::segment::InputFile;
+        use indexrs_daemon::json_protocol::FileResponse;
+
+        let dir = tempfile::tempdir().unwrap();
+        let indexrs_dir = dir.path().join(".indexrs");
+        std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        let file_content = b"fn main() {\n    println!(\"hello\");\n}\n";
+
+        // Write source file to disk so background catch-up doesn't tombstone it.
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), file_content).unwrap();
+
+        // Build index.
+        let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+        manager
+            .index_files(vec![InputFile {
+                path: "src/main.rs".to_string(),
+                content: file_content.to_vec(),
+                mtime: 100,
+            }])
+            .unwrap();
+        drop(manager);
+
+        // Start daemon.
+        let repo_root = dir.path().to_path_buf();
+        let repo_root_clone = repo_root.clone();
+        let daemon_handle = tokio::spawn(async move {
+            start_daemon(&repo_root_clone).await.unwrap();
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Connect.
+        let stream = try_connect(&repo_root).await.expect("should connect");
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        // Send GetFile request.
+        let req = serde_json::to_string(&DaemonRequest::GetFile {
+            path: "src/main.rs".to_string(),
+            line_start: None,
+            line_end: None,
+        })
+        .unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+
+        // Read responses: expect a Json frame then Done.
+        let mut json_payload = None;
+        loop {
+            let resp = crate::wire::read_response(&mut reader).await.unwrap();
+            match resp {
+                DaemonResponse::Json { payload } => {
+                    json_payload = Some(payload);
+                }
+                DaemonResponse::Done { .. } => {
+                    break;
+                }
+                other => panic!("unexpected response: {other:?}"),
+            }
+        }
+
+        let payload = json_payload.expect("expected a Json frame for GetFile");
+        let file_resp: FileResponse = serde_json::from_str(&payload)
+            .unwrap_or_else(|e| panic!("failed to parse FileResponse: {e}, payload: {payload}"));
+        assert_eq!(file_resp.path, "src/main.rs");
+        assert!(
+            file_resp.lines.iter().any(|l| l.contains("println")),
+            "expected lines to contain 'println', got: {:?}",
+            file_resp.lines
+        );
+
+        // Shutdown.
+        let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(2), daemon_handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_daemon_get_file_not_found() {
+        use indexrs_core::segment::InputFile;
+
+        let dir = tempfile::tempdir().unwrap();
+        let indexrs_dir = dir.path().join(".indexrs");
+        std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        // Write source file to disk so background catch-up doesn't tombstone it.
+        std::fs::write(dir.path().join("test.rs"), b"fn test() {}\n").unwrap();
+
+        // Build index with a file so we have a valid segment.
+        let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+        manager
+            .index_files(vec![InputFile {
+                path: "test.rs".to_string(),
+                content: b"fn test() {}\n".to_vec(),
+                mtime: 100,
+            }])
+            .unwrap();
+        drop(manager);
+
+        // Start daemon.
+        let repo_root = dir.path().to_path_buf();
+        let repo_root_clone = repo_root.clone();
+        let daemon_handle = tokio::spawn(async move {
+            start_daemon(&repo_root_clone).await.unwrap();
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Connect.
+        let stream = try_connect(&repo_root).await.expect("should connect");
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        // Send GetFile request for a nonexistent file.
+        let req = serde_json::to_string(&DaemonRequest::GetFile {
+            path: "nonexistent.rs".to_string(),
+            line_start: None,
+            line_end: None,
+        })
+        .unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+
+        // Read response: expect an Error frame.
+        let resp = crate::wire::read_response(&mut reader).await.unwrap();
+        match resp {
+            DaemonResponse::Error { message } => {
+                assert!(
+                    message.contains("not found"),
+                    "expected error message containing 'not found', got: {message}"
+                );
+            }
+            other => panic!("expected Error response, got: {other:?}"),
+        }
+
+        // Shutdown.
+        let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(2), daemon_handle).await;
+    }
 }
