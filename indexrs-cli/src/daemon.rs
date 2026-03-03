@@ -13,6 +13,7 @@ use indexrs_core::error::IndexError;
 use indexrs_core::git_diff::GitChangeDetector;
 use indexrs_core::search::MatchPattern;
 
+use indexrs_daemon::json_protocol::{JsonSearchFrame, SearchStats};
 pub use indexrs_daemon::{DaemonRequest, DaemonResponse};
 
 use crate::args::SortOrder;
@@ -656,12 +657,152 @@ async fn handle_connection(
                     }
                 }
             }
-            req @ (DaemonRequest::JsonSearch { .. }
-            | DaemonRequest::GetFile { .. }
+            DaemonRequest::JsonSearch {
+                query,
+                page,
+                per_page,
+                context_lines,
+                language,
+                path_glob,
+            } => {
+                let start = Instant::now();
+
+                // Build the full query string by prepending filters.
+                let mut full_query = String::new();
+                if let Some(ref lang) = language {
+                    full_query.push_str(&format!("language:{lang} "));
+                }
+                if let Some(ref glob) = path_glob {
+                    full_query.push_str(&format!("path:{glob} "));
+                }
+                full_query.push_str(&query);
+
+                let parsed_query = match indexrs_core::query::parse_query(&full_query) {
+                    Ok(q) => q,
+                    Err(e) => {
+                        wire::write_response(
+                            &mut writer,
+                            &DaemonResponse::Error {
+                                message: e.to_string(),
+                            },
+                        )
+                        .await
+                        .map_err(IndexError::Io)?;
+                        line.clear();
+                        continue;
+                    }
+                };
+
+                // Clamp per_page to a reasonable maximum.
+                let per_page = per_page.min(100);
+                let page = page.max(1);
+
+                // Fetch enough results to cover the requested page.
+                let max_results = page * per_page;
+                let search_opts = indexrs_core::search::SearchOptions {
+                    context_lines,
+                    max_results: Some(max_results),
+                };
+
+                let snapshot = manager.snapshot();
+                let search_result = match tokio::task::spawn_blocking(move || {
+                    indexrs_core::multi_search::search_segments_with_query(
+                        &snapshot,
+                        &parsed_query,
+                        &search_opts,
+                    )
+                })
+                .await
+                {
+                    Ok(Ok(result)) => result,
+                    Ok(Err(e)) => {
+                        wire::write_response(
+                            &mut writer,
+                            &DaemonResponse::Error {
+                                message: e.to_string(),
+                            },
+                        )
+                        .await
+                        .map_err(IndexError::Io)?;
+                        line.clear();
+                        continue;
+                    }
+                    Err(e) => {
+                        wire::write_response(
+                            &mut writer,
+                            &DaemonResponse::Error {
+                                message: format!("search task panicked: {e}"),
+                            },
+                        )
+                        .await
+                        .map_err(IndexError::Io)?;
+                        line.clear();
+                        continue;
+                    }
+                };
+
+                // Paginate.
+                let offset = (page - 1) * per_page;
+                let paginated = search_result.paginate(offset, per_page);
+                let total_files = search_result.total_file_count;
+                let total_pages = if total_files == 0 {
+                    0
+                } else {
+                    total_files.div_ceil(per_page)
+                };
+
+                // Send each FileMatch as a JsonSearchFrame::Result.
+                for file_match in &paginated.files {
+                    let frame = JsonSearchFrame::Result {
+                        file: file_match.clone(),
+                    };
+                    let payload = serde_json::to_string(&frame)
+                        .map_err(|e| IndexError::Io(std::io::Error::other(e)))?;
+                    wire::write_response(&mut writer, &DaemonResponse::Json { payload })
+                        .await
+                        .map_err(IndexError::Io)?;
+                }
+
+                // Send stats.
+                let elapsed = start.elapsed();
+                let stats_frame = JsonSearchFrame::Stats {
+                    stats: SearchStats {
+                        total_matches: search_result.total_match_count,
+                        files_matched: total_files,
+                        duration_ms: elapsed.as_millis() as u64,
+                        page,
+                        per_page,
+                        total_pages,
+                        has_next: page < total_pages,
+                    },
+                };
+                let stats_payload = serde_json::to_string(&stats_frame)
+                    .map_err(|e| IndexError::Io(std::io::Error::other(e)))?;
+                wire::write_response(
+                    &mut writer,
+                    &DaemonResponse::Json {
+                        payload: stats_payload,
+                    },
+                )
+                .await
+                .map_err(IndexError::Io)?;
+
+                // Send Done.
+                wire::write_response(
+                    &mut writer,
+                    &DaemonResponse::Done {
+                        total: paginated.files.len(),
+                        duration_ms: elapsed.as_millis() as u64,
+                        stale: !caught_up.load(Ordering::Relaxed),
+                    },
+                )
+                .await
+                .map_err(IndexError::Io)?;
+            }
+            req @ (DaemonRequest::GetFile { .. }
             | DaemonRequest::Status
             | DaemonRequest::Health) => {
                 let type_name = match req {
-                    DaemonRequest::JsonSearch { .. } => "JsonSearch",
                     DaemonRequest::GetFile { .. } => "GetFile",
                     DaemonRequest::Status => "Status",
                     DaemonRequest::Health => "Health",
