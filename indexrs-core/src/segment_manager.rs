@@ -490,6 +490,143 @@ impl SegmentManager {
         Ok(())
     }
 
+    /// Like [`apply_changes`](Self::apply_changes) but emits structured
+    /// [`ReindexProgress`](crate::reindex_progress::ReindexProgress) events.
+    pub fn apply_changes_with_progress<
+        F: Fn(crate::reindex_progress::ReindexProgress) + Send + Sync,
+    >(
+        &self,
+        repo_dir: &Path,
+        changes: &[ChangeEvent],
+        on_progress: F,
+    ) -> Result<(), IndexError> {
+        use crate::reindex_progress::ReindexProgress;
+
+        if changes.is_empty() {
+            return Ok(());
+        }
+
+        tracing::info!(change_count = changes.len(), "applying changes");
+        let start = std::time::Instant::now();
+
+        let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let current_segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
+
+        let mut tombstone_updates: std::collections::HashMap<usize, TombstoneSet> =
+            std::collections::HashMap::new();
+
+        let mut new_files: Vec<InputFile> = Vec::new();
+        let total_changes = changes.len();
+
+        for (i, change) in changes.iter().enumerate() {
+            let path_str = change.path.to_string_lossy().to_string();
+
+            if tombstone::needs_tombstone(&change.kind) {
+                let locations = Self::find_file_in_segments(&current_segments, &path_str);
+                for (seg_idx, file_id) in locations {
+                    tombstone_updates
+                        .entry(seg_idx)
+                        .or_default()
+                        .insert(file_id);
+                }
+            }
+
+            if tombstone::needs_new_entry(&change.kind) {
+                let has_dotdot = change
+                    .path
+                    .components()
+                    .any(|c| c == std::path::Component::ParentDir);
+                if has_dotdot || change.path.is_absolute() {
+                    tracing::warn!(
+                        path = %change.path.display(),
+                        "skipping change with potentially unsafe path (contains '..' or is absolute)"
+                    );
+                    continue;
+                }
+
+                let full_path = repo_dir.join(&change.path);
+                if full_path.exists() {
+                    let content = fs::read(&full_path)?;
+
+                    if !crate::binary::should_index_file(&full_path, &content, 1_048_576) {
+                        continue;
+                    }
+
+                    let mtime = full_path
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .map(|t| {
+                            t.duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs()
+                        })
+                        .unwrap_or(0);
+                    new_files.push(InputFile {
+                        path: path_str,
+                        content,
+                        mtime,
+                    });
+                }
+            }
+
+            on_progress(ReindexProgress::PreparingFiles {
+                current: i + 1,
+                total: total_changes,
+            });
+        }
+
+        // Build new segment BEFORE writing tombstones
+        let mut updated_segments = current_segments.clone();
+        let new_file_count = new_files.len();
+        if !new_files.is_empty() {
+            let seg_id = self.next_segment_id()?;
+            tracing::debug!(
+                segment_id = seg_id.0,
+                new_file_count,
+                "building replacement segment"
+            );
+            let writer = SegmentWriter::new(&self.segments_dir, seg_id);
+            let files_total = new_files.len();
+            let files_done = std::sync::atomic::AtomicUsize::new(0);
+            let segment = writer.build_with_progress(new_files, || {
+                let done = files_done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                on_progress(ReindexProgress::BuildingSegment {
+                    segment_id: seg_id.0,
+                    files_done: done,
+                    files_total,
+                });
+            })?;
+            updated_segments.push(Arc::new(segment));
+        }
+
+        // Write tombstones
+        let tombstone_count: u32 = tombstone_updates.values().map(|ts| ts.len()).sum();
+        if tombstone_count > 0 {
+            on_progress(ReindexProgress::Tombstoning {
+                count: tombstone_count,
+            });
+        }
+        for (seg_idx, new_tombstones) in &tombstone_updates {
+            let segment = &current_segments[*seg_idx];
+            let mut existing = segment.load_tombstones()?;
+            existing.merge(new_tombstones);
+            existing.write_to(&segment.dir_path().join("tombstones.bin"))?;
+            segment.set_cached_tombstones(existing);
+        }
+
+        self.state.publish(updated_segments);
+
+        tracing::info!(
+            change_count = changes.len(),
+            tombstone_count,
+            new_file_count,
+            segments_affected = tombstone_updates.len(),
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            "changes applied"
+        );
+        Ok(())
+    }
+
     /// Check whether the index should be compacted.
     ///
     /// Returns `true` if:
@@ -1650,5 +1787,41 @@ mod tests {
         // Search should find "result" across all segments
         let result = search_segments(&snap, "result").unwrap();
         assert_eq!(result.files.len(), 6);
+    }
+
+    #[test]
+    fn test_apply_changes_with_progress_reports_events() {
+        use crate::reindex_progress::ReindexProgress;
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo_dir = dir.path();
+        let indexrs_dir = repo_dir.join(".indexrs");
+        fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        // Write a source file.
+        fs::write(repo_dir.join("hello.rs"), "fn hello() {}").unwrap();
+
+        let manager = SegmentManager::new(&indexrs_dir).unwrap();
+
+        let changes = vec![ChangeEvent {
+            path: PathBuf::from("hello.rs"),
+            kind: ChangeKind::Created,
+        }];
+
+        let events = std::sync::Mutex::new(Vec::new());
+        manager
+            .apply_changes_with_progress(repo_dir, &changes, |ev| {
+                events.lock().unwrap().push(ev);
+            })
+            .unwrap();
+
+        let events = events.into_inner().unwrap();
+        // Must contain at least a BuildingSegment event.
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ReindexProgress::BuildingSegment { .. })),
+            "expected BuildingSegment event, got: {events:?}"
+        );
     }
 }
