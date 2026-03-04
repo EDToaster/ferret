@@ -385,4 +385,86 @@ mod tests {
             "expected CompactingSegments with force_compact=true, got: {events:?}"
         );
     }
+
+    #[test]
+    fn test_catchup_force_compact_emits_detailed_compaction_events() {
+        use crate::reindex_progress::ReindexProgress;
+        use crate::segment::InputFile;
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        init_git_repo(repo);
+
+        let indexrs_dir = repo.join(".indexrs");
+        fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+        let manager = Arc::new(SegmentManager::new(&indexrs_dir).unwrap());
+
+        // Pre-build two separate segments so compaction has work to do.
+        manager
+            .index_files(vec![InputFile {
+                path: "a.rs".to_string(),
+                content: b"fn a() { let x = 1; }".to_vec(),
+                mtime: 1,
+            }])
+            .unwrap();
+        manager
+            .index_files(vec![InputFile {
+                path: "b.rs".to_string(),
+                content: b"fn b() { let y = 2; }".to_vec(),
+                mtime: 1,
+            }])
+            .unwrap();
+        assert_eq!(
+            manager.snapshot().len(),
+            2,
+            "need 2 segments for compaction"
+        );
+
+        // Write checkpoint at current HEAD so catchup finds no changes.
+        let git = GitChangeDetector::new(repo.to_path_buf());
+        let head = git.get_head_sha().unwrap();
+        let cp = Checkpoint::new(Some(head), 0);
+        write_checkpoint(&indexrs_dir, &cp).unwrap();
+
+        let events = std::sync::Mutex::new(Vec::new());
+        let _changes = run_catchup_with_progress(repo, &indexrs_dir, &manager, true, |ev| {
+            events.lock().unwrap().push(ev);
+        })
+        .unwrap();
+
+        let events = events.into_inner().unwrap();
+
+        // Should have CompactingSegments (start signal).
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ReindexProgress::CompactingSegments { .. })),
+            "expected CompactingSegments, got: {events:?}"
+        );
+        // Should have CompactingCollected with live_files > 0.
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ReindexProgress::CompactingCollected { live_files, .. } if *live_files > 0)),
+            "expected CompactingCollected with live_files > 0, got: {events:?}"
+        );
+        // Should have CompactionComplete.
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ReindexProgress::CompactionComplete { .. })),
+            "expected CompactionComplete, got: {events:?}"
+        );
+        // Complete should come AFTER CompactionComplete.
+        let compact_done_idx = events
+            .iter()
+            .position(|e| matches!(e, ReindexProgress::CompactionComplete { .. }));
+        let complete_idx = events
+            .iter()
+            .position(|e| matches!(e, ReindexProgress::Complete { .. }));
+        assert!(
+            compact_done_idx < complete_idx,
+            "CompactionComplete should precede Complete"
+        );
+    }
 }
