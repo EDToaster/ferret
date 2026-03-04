@@ -75,6 +75,8 @@ pub struct SegmentDetailItem {
     pub trigrams_bytes: String,
     pub content_bytes: String,
     pub meta_paths_bytes: String,
+    pub tombstones_bytes: String,
+    pub symbols_bytes: String,
 }
 
 /// Language info with per-extension breakdown for tooltips.
@@ -108,6 +110,10 @@ pub struct RepoOverviewItem {
     pub content_pct: String,
     pub trigrams_pct: String,
     pub meta_pct: String,
+    pub tombstones_bytes: String,
+    pub tombstones_pct: String,
+    pub symbols_bytes: String,
+    pub symbols_pct: String,
     pub has_breakdown: bool,
     pub segment_details: Vec<SegmentDetailItem>,
 }
@@ -497,6 +503,8 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
             content_bytes_raw,
             trigrams_bytes_raw,
             meta_paths_bytes_raw,
+            tombstones_bytes_raw,
+            symbols_bytes_raw,
             segment_details_raw,
             lang_extensions,
         ) = match sr_opt {
@@ -513,6 +521,8 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
                 sr.content_bytes,
                 sr.trigrams_bytes,
                 sr.meta_paths_bytes,
+                sr.tombstones_bytes,
+                sr.symbols_bytes,
                 sr.segment_details,
                 sr.language_extensions,
             ),
@@ -525,6 +535,8 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
                 vec![],
                 0.0,
                 path.is_dir(),
+                0,
+                0,
                 0,
                 0,
                 0,
@@ -556,21 +568,44 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
             })
             .collect();
 
-        let total_breakdown = content_bytes_raw + trigrams_bytes_raw + meta_paths_bytes_raw;
-        let (content_pct, trigrams_pct, meta_pct) = if total_breakdown > 0 {
-            let c = content_bytes_raw as f64 / total_breakdown as f64 * 100.0;
-            let t = trigrams_bytes_raw as f64 / total_breakdown as f64 * 100.0;
-            let m = 100.0 - c - t; // ensure they sum to 100
-            (format!("{c:.1}"), format!("{t:.1}"), format!("{m:.1}"))
-        } else {
-            ("0".to_string(), "0".to_string(), "0".to_string())
-        };
+        let total_breakdown = content_bytes_raw
+            + trigrams_bytes_raw
+            + meta_paths_bytes_raw
+            + tombstones_bytes_raw
+            + symbols_bytes_raw;
+        let (content_pct, trigrams_pct, meta_pct, tombstones_pct, symbols_pct) =
+            if total_breakdown > 0 {
+                let c = content_bytes_raw as f64 / total_breakdown as f64 * 100.0;
+                let t = trigrams_bytes_raw as f64 / total_breakdown as f64 * 100.0;
+                let m = meta_paths_bytes_raw as f64 / total_breakdown as f64 * 100.0;
+                let tb = tombstones_bytes_raw as f64 / total_breakdown as f64 * 100.0;
+                let s = 100.0 - c - t - m - tb;
+                (
+                    format!("{c:.1}"),
+                    format!("{t:.1}"),
+                    format!("{m:.1}"),
+                    format!("{tb:.1}"),
+                    format!("{s:.1}"),
+                )
+            } else {
+                (
+                    "0".into(),
+                    "0".into(),
+                    "0".into(),
+                    "0".into(),
+                    "0".into(),
+                )
+            };
 
         let segment_details: Vec<SegmentDetailItem> = segment_details_raw
             .into_iter()
             .map(|s| {
-                let total =
-                    s.trigrams_bytes + s.meta_paths_bytes + s.content_bytes + s.tombstones_bytes;
+                let total = s.trigrams_bytes
+                    + s.meta_paths_bytes
+                    + s.content_bytes
+                    + s.tombstones_bytes
+                    + s.symbols_bytes
+                    + s.sym_trigrams_bytes;
                 SegmentDetailItem {
                     name: format!("seg_{:04}", s.id),
                     entry_count: s.entry_count,
@@ -579,6 +614,8 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
                     trigrams_bytes: format_bytes(s.trigrams_bytes),
                     content_bytes: format_bytes(s.content_bytes),
                     meta_paths_bytes: format_bytes(s.meta_paths_bytes),
+                    tombstones_bytes: format_bytes(s.tombstones_bytes),
+                    symbols_bytes: format_bytes(s.symbols_bytes + s.sym_trigrams_bytes),
                 }
             })
             .collect();
@@ -606,6 +643,10 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
             content_pct,
             trigrams_pct,
             meta_pct,
+            tombstones_bytes: format_bytes(tombstones_bytes_raw),
+            tombstones_pct,
+            symbols_bytes: format_bytes(symbols_bytes_raw),
+            symbols_pct,
             has_breakdown: total_breakdown > 0,
             segment_details,
         });
