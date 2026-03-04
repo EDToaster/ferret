@@ -365,6 +365,8 @@ impl SegmentWriter {
             language: Language,
             line_count: u32,
             compressed: Vec<u8>,
+            #[cfg(feature = "symbols")]
+            symbols: Vec<crate::symbol_extractor::SymbolEntry>,
         }
 
         let mut posting_builder = PostingListBuilder::file_only();
@@ -386,11 +388,20 @@ impl SegmentWriter {
                 let compressed = zstd::bulk::compress(&input.content, ZSTD_LEVEL)
                     .expect("zstd compression should not fail on valid input");
 
+                #[cfg(feature = "symbols")]
+                let symbols = crate::symbol_extractor::extract_symbols(
+                    FileId(0), // placeholder — remapped in Phase 3
+                    &input.content,
+                    language,
+                );
+
                 ProcessedFile {
                     content_hash,
                     language,
                     line_count,
                     compressed,
+                    #[cfg(feature = "symbols")]
+                    symbols,
                 }
             })
             .collect();
@@ -443,20 +454,18 @@ impl SegmentWriter {
         // Create empty tombstones.bin
         fs::write(temp_dir.join("tombstones.bin"), b"")?;
 
-        // Extract symbols and write symbol index (when symbols feature is enabled)
+        // Collect pre-extracted symbols and write symbol index (when symbols feature is enabled)
         #[cfg(feature = "symbols")]
         {
-            use crate::symbol_extractor::extract_symbols;
             use crate::symbol_index::{SymbolIndexWriter, SymbolRecord};
 
             let mut symbol_records = Vec::new();
-            for (i, (input, proc_file)) in files.iter().zip(processed.iter()).enumerate() {
+            for (i, proc_file) in processed.iter().enumerate() {
                 let file_id = FileId(i as u32);
-                let entries = extract_symbols(file_id, &input.content, proc_file.language);
-                for entry in entries {
+                for entry in &proc_file.symbols {
                     symbol_records.push(SymbolRecord {
-                        file_id: entry.file_id,
-                        name: entry.name,
+                        file_id,
+                        name: entry.name.clone(),
                         kind: entry.kind,
                         line: entry.line,
                         column: entry.column,
@@ -1171,5 +1180,47 @@ mod tests {
         // load_tombstones should return empty, not an I/O error
         let ts = segment.load_tombstones().unwrap();
         assert!(ts.is_empty());
+    }
+
+    #[cfg(feature = "symbols")]
+    #[test]
+    fn test_segment_build_extracts_symbols_in_parallel() {
+        use crate::symbol_index::SymbolIndexReader;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        fs::create_dir_all(&base_dir).unwrap();
+
+        // Create enough files to exercise rayon parallelism
+        let files: Vec<InputFile> = (0..20)
+            .map(|i| InputFile {
+                path: format!("src/mod_{i}.rs"),
+                content: format!("fn func_{i}() {{}}\nstruct Struct_{i};\n").into_bytes(),
+                mtime: 1700000000 + i as u64,
+            })
+            .collect();
+
+        let writer = SegmentWriter::new(&base_dir, SegmentId(0));
+        let segment = writer.build(files).unwrap();
+
+        // Verify the symbol index was created and contains expected symbols
+        let seg_dir = base_dir.join("seg_0000");
+        assert!(seg_dir.join("symbols.bin").exists());
+        assert!(seg_dir.join("sym_trigrams.bin").exists());
+
+        let reader = SymbolIndexReader::open(&seg_dir).unwrap();
+        assert!(
+            reader.symbol_count() >= 40,
+            "expected at least 40 symbols (20 fns + 20 structs), got {}",
+            reader.symbol_count()
+        );
+
+        // Verify we can search for symbols
+        let hits = reader.search("func_0").unwrap();
+        assert!(!hits.is_empty(), "should find func_0");
+        assert_eq!(hits[0].name, "func_0");
+
+        // Verify segment's symbol_reader() works
+        assert!(segment.symbol_reader().is_some());
     }
 }
