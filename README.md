@@ -126,7 +126,7 @@ indexrs search --query 'language:rust async NOT test NOT example'
 
 Both full names and common extensions work (`language:rust` and `lang:rs` are equivalent):
 
-`rust`, `python`, `typescript`, `javascript`, `go`, `c`, `cpp`, `java`, `ruby`, `shell`, `markdown`, `yaml`, `toml`, `json`, `xml`, `html`, `css`, `scss`, `sass`, `sql`, `protobuf`, `dockerfile`, `hcl`, `kotlin`, `swift`, `scala`, `elixir`, `erlang`, `haskell`, `ocaml`, `lua`, `perl`, `r`, `dart`, `zig`, `nix`
+`rust`, `python`, `typescript`, `javascript`, `go`, `c`, `cpp`, `java`, `ruby`, `shell`, `markdown`, `yaml`, `toml`, `json`, `xml`, `html`, `css`, `scss`, `sass`, `sql`, `protobuf`, `dockerfile`, `hcl`, `kotlin`, `swift`, `scala`, `elixir`, `erlang`, `haskell`, `ocaml`, `lua`, `perl`, `r`, `dart`, `zig`, `nix`, `plaintext`, `starlark`, `jsonnet`, `haml`, `csv`, `graphql`, `erb`, `template`, `restructuredtext`, `ejs`, `groovy`, `batch`, `csharp`, `vue`, `svelte`, `powershell`, `less`, `coffeescript`, `solidity`, `clojure`, `julia`, `assembly`, `nim`
 
 ## Web interface
 
@@ -176,8 +176,11 @@ cargo fmt --all -- --check                # Format check
 | `indexrs files` | List indexed files with optional language/path filters |
 | `indexrs status` | Show index stats (segment count, file count) |
 | `indexrs reindex` | Incremental reindex (`--full` for complete rebuild) |
+| `indexrs estimate` | Estimate index size and peak RAM without building |
+| `indexrs repos` | Manage registered repositories (list, add, remove) |
 | `indexrs preview <file>` | Preview file contents with syntax highlighting |
 | `indexrs web` | Start the web interface (default port 4040) |
+| `indexrs mcp` | Run as an MCP server over stdio |
 
 ## Workspace crates
 

@@ -110,8 +110,8 @@ indexrs is a local code indexing service for fast substring search, inspired by 
 
 ### Workspace Crates
 
-- **`indexrs-core`** — Library with all indexing/search logic (28 modules). No binary targets.
-- **`indexrs-cli`** — CLI binary (`clap` + `tokio`). Subcommands: search, files, symbols, preview, status, reindex, mcp, web. The `mcp` subcommand runs the MCP server over stdio (gated behind the `mcp` cargo feature, enabled by default). The `web` subcommand starts the web interface.
+- **`indexrs-core`** — Library with all indexing/search logic (35 modules). No binary targets.
+- **`indexrs-cli`** — CLI binary (`clap` + `tokio`). Subcommands: init, search, files, symbols, preview, status, reindex, estimate, repos, web, mcp. The `mcp` subcommand runs the MCP server over stdio (gated behind the `mcp` cargo feature, enabled by default). The `web` subcommand starts the web interface. The `repos` subcommand manages multi-repo registration (list/add/remove).
 - **`indexrs-daemon`** — Daemon protocol library. TLV wire format, Unix socket client helpers (`ensure_daemon`, `send_json_request`), structured JSON response types (`JsonSearchFrame`, `FileResponse`, `StatusResponse`, `HealthResponse`).
 - **`indexrs-web`** — Web interface library (`axum` + `htmx` + `askama`). Proxies all operations to per-repo daemons over Unix sockets. JSON API at `/api/v1/`, server-rendered HTML UI at `/`, SSE streaming for live search and status.
 
@@ -130,7 +130,7 @@ The indexing pipeline flows: **files → trigrams → posting lists → binary f
 - `metadata.rs` — `MetadataBuilder`/`MetadataReader` for file metadata (path, hash, language, content offset). Fixed 58-byte entries + string pool.
 - `content.rs` — `ContentStoreWriter`/`ContentStoreReader` for zstd-compressed file content with random access via (offset, len) pairs.
 - `search.rs` — Search result types: `LineMatch`, `FileMatch` (with relevance score), `SearchResult` (with duration). Implements `Display` for plain-text output.
-- `types.rs` — Core types: `FileId(u32)`, `Trigram([u8; 3])`, `SegmentId(u32)`, `Language` enum (37 variants with `from_extension()` detection), `SymbolKind` enum.
+- `types.rs` — Core types: `FileId(u32)`, `Trigram([u8; 3])`, `SegmentId(u32)`, `Language` enum (59 variants + Unknown, with `from_extension()` detection), `SymbolKind` enum.
 - `error.rs` — `IndexError` enum with `thiserror`. All fallible ops return `Result<T, IndexError>`.
 
 #### M2 Modules (File Walking & Change Detection)
@@ -150,6 +150,12 @@ The indexing pipeline flows: **files → trigrams → posting lists → binary f
 - `multi_search.rs` — `search_segments()` queries all segments in a snapshot, filters tombstoned entries, verifies content matches with line/column tracking, deduplicates across segments (newest wins).
 - `segment_manager.rs` — `SegmentManager` orchestrates segment lifecycle: `index_files()`, `index_files_with_budget()` (splits into size-capped segments, default 256 MB), `apply_changes()` (tombstone + rebuild), `should_compact()` (>10 segments or >30% tombstone ratio), `compact()` (merge segments removing tombstoned entries), `compact_background()` (tokio::spawn).
 - `recovery.rs` — `recover_segments()` scans segment dirs on startup, cleans temp dirs, validates headers (magic + version), loads valid segments sorted by ID. `cleanup_lock_file()` for stale locks.
+- `checkpoint.rs` — Checkpoint persistence for daemon indexing state. Records last indexed commit/mtime so the daemon can catch up incrementally on restart. Atomic writes via temp-file-then-rename.
+- `catchup.rs` — Catch-up logic for daemon startup. Detects changes since last checkpoint via git (fast path) or hash-based diff (fallback), applies them to the segment manager, writes a new checkpoint.
+- `hash_diff.rs` — Hash-based diff fallback for catch-up when git is unavailable. Walks the file tree, computes hashes, and compares against segment metadata to emit `ChangeEvent`s.
+- `registry.rs` — Repo registry configuration for multi-repo support. TOML file (`~/.config/indexrs/repos.toml`) listing known repositories by name and path.
+- `reindex_progress.rs` — Structured progress events emitted during reindex operations. Sent as JSON over the daemon wire protocol.
+- `disk.rs` — Utility for recursively computing directory sizes on disk.
 
 #### M4 Modules (Query Engine & Ranking)
 
@@ -158,6 +164,7 @@ The indexing pipeline flows: **files → trigrams → posting lists → binary f
 - `query_plan.rs` — Query planner: `plan_query()` builds segment-specific `QueryPlan`s from a `Query` AST. Plans include `PreFilter`s (language, path glob), sorted `ScoredTrigram` lists (smallest-first for efficient intersection), and a `VerifyStep` (literal or regex). `plan_query_multi()` plans across multiple segments.
 - `ranking.rs` — Composite relevance scoring with 5 weighted signals: match type (0.30), path depth (0.15), filename match (0.15), match count (0.25), recency (0.15). `score_file_match(ScoringInput, RankingConfig) -> f64`. Types: `MatchType` enum, `RankingConfig`, `ScoringInput`.
 - `verify.rs` — Content verification of trigram candidates. `ContentVerifier` supports literal, regex, and case-insensitive matching. `verify()` returns `Vec<LineMatch>` with highlight ranges. `verify_with_context()` adds before/after context lines with block merging.
+- `query_match.rs` — Recursive query AST verifier. `QueryMatcher` evaluates a `Query` AST against file content by walking the AST tree — leaf nodes use `ContentVerifier`, boolean nodes (AND/OR/NOT) apply set logic.
 
 ### Binary Formats
 
