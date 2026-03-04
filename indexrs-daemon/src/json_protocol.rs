@@ -49,6 +49,9 @@ pub struct SegmentInfo {
     pub symbols_bytes: u64,
     #[serde(default)]
     pub sym_trigrams_bytes: u64,
+    /// Whether this is a temporary segment (in-progress build or compaction).
+    #[serde(default)]
+    pub temporary: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -1127,10 +1127,9 @@ async fn handle_connection(
                         tombstones_bytes: tombstones_b,
                         symbols_bytes: symbols_b,
                         sym_trigrams_bytes: sym_trigrams_b,
+                        temporary: false,
                     });
                 }
-
-                segment_details.sort_by_key(|s| s.id);
 
                 // Sort languages by count descending, take top 10.
                 let mut languages: Vec<(String, usize)> = lang_counts.into_iter().collect();
@@ -1160,20 +1159,57 @@ async fn handle_connection(
                 let path_valid = repo_root.is_dir();
 
                 // Scan for temporary compaction segment dirs (.seg_*_tmp_*).
-                let temp_bytes = std::fs::read_dir(&segments_dir)
-                    .ok()
-                    .map(|entries| {
-                        entries
-                            .filter_map(|e| e.ok())
-                            .filter(|e| {
-                                let name = e.file_name();
-                                let name = name.to_string_lossy();
-                                name.starts_with(".seg_") && name.contains("_tmp_")
-                            })
-                            .map(|e| indexrs_core::dir_size(&e.path()))
-                            .sum::<u64>()
-                    })
-                    .unwrap_or(0);
+                let mut temp_bytes: u64 = 0;
+                if let Ok(entries) = std::fs::read_dir(&segments_dir) {
+                    for entry in entries.filter_map(|e| e.ok()) {
+                        let name = entry.file_name();
+                        let name = name.to_string_lossy();
+                        if !(name.starts_with(".seg_") && name.contains("_tmp_")) {
+                            continue;
+                        }
+                        let dir = entry.path();
+                        let dir_bytes = indexrs_core::dir_size(&dir);
+                        temp_bytes += dir_bytes;
+
+                        // Extract segment id from ".seg_NNNN_tmp_PID".
+                        let id = name
+                            .strip_prefix(".seg_")
+                            .and_then(|s| s.split('_').next())
+                            .and_then(|s| s.parse::<u32>().ok())
+                            .unwrap_or(0);
+
+                        let trigrams_b = file_size(&dir.join("trigrams.bin"));
+                        let meta_b = file_size(&dir.join("meta.bin"));
+                        let paths_b = file_size(&dir.join("paths.bin"));
+                        let content_b = file_size(&dir.join("content.zst"));
+                        let tombstones_b = file_size(&dir.join("tombstones.bin"));
+                        let symbols_b = file_size(&dir.join("symbols.bin"));
+                        let sym_trigrams_b = file_size(&dir.join("sym_trigrams.bin"));
+
+                        // Count entries from meta.bin header if present.
+                        let entry_count = std::fs::read(dir.join("meta.bin"))
+                            .ok()
+                            .filter(|data| data.len() >= 10)
+                            .map(|data| u32::from_le_bytes([data[6], data[7], data[8], data[9]]))
+                            .unwrap_or(0);
+
+                        segment_details.push(indexrs_daemon::SegmentInfo {
+                            id,
+                            entry_count,
+                            tombstoned_count: 0,
+                            trigrams_bytes: trigrams_b,
+                            meta_paths_bytes: meta_b + paths_b,
+                            content_bytes: content_b,
+                            tombstones_bytes: tombstones_b,
+                            symbols_bytes: symbols_b,
+                            sym_trigrams_bytes: sym_trigrams_b,
+                            temporary: true,
+                        });
+                    }
+                }
+
+                // Sort all segments (regular + temporary) by id.
+                segment_details.sort_by_key(|s| (s.temporary, s.id));
 
                 let is_compacting = manager.is_compacting();
                 let status = if !caught_up.load(Ordering::Relaxed) {
