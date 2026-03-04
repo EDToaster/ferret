@@ -125,6 +125,9 @@
                             <span class="lang-tooltip-count">{{ ext.1 }}</span>
                         </span>
                         {% endfor %}
+                        {% if lang.more_extensions > 0 %}
+                        <span class="lang-tooltip-more">+ {{ lang.more_extensions }} more</span>
+                        {% endif %}
                     </span>
                     {% endif %}
                 </span>

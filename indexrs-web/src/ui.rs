@@ -82,6 +82,8 @@ pub struct LanguageInfo {
     pub name: String,
     pub count: usize,
     pub extensions: Vec<(String, usize)>,
+    /// Number of additional extensions not shown (beyond the top 10).
+    pub more_extensions: usize,
 }
 
 /// A repo entry for the repos overview page.
@@ -538,11 +540,18 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
         let languages: Vec<LanguageInfo> = raw_languages
             .into_iter()
             .map(|(name, count)| {
-                let extensions = ext_map.get(&name).cloned().unwrap_or_default();
+                let all_exts = ext_map.get(&name).cloned().unwrap_or_default();
+                let more_extensions = all_exts.len().saturating_sub(10);
+                let extensions = if all_exts.len() > 10 {
+                    all_exts[..10].to_vec()
+                } else {
+                    all_exts
+                };
                 LanguageInfo {
                     name,
                     count,
                     extensions,
+                    more_extensions,
                 }
             })
             .collect();
