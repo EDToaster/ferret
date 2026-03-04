@@ -42,6 +42,22 @@ pub struct FileParams {
     pub line_end: Option<usize>,
 }
 
+#[derive(Deserialize)]
+pub struct SymbolParams {
+    pub q: Option<String>,
+    pub kind: Option<String>,
+    pub language: Option<String>,
+    pub path: Option<String>,
+    #[serde(default = "default_symbol_limit")]
+    pub max_results: usize,
+    #[serde(default)]
+    pub offset: usize,
+}
+
+fn default_symbol_limit() -> usize {
+    100
+}
+
 // -- Response structs --
 
 #[derive(Serialize)]
@@ -53,6 +69,12 @@ pub struct SearchResponse {
 #[derive(Serialize)]
 pub struct StatsOnlyResponse {
     pub stats: indexrs_daemon::SearchStats,
+}
+
+#[derive(Serialize)]
+pub struct SymbolSearchResponse {
+    pub symbols: Vec<indexrs_daemon::SymbolMatchResponse>,
+    pub stats: indexrs_daemon::SymbolsStats,
 }
 
 #[derive(Serialize)]
@@ -114,6 +136,36 @@ pub async fn search(
     } else {
         Ok(Json(SearchResponse { results, stats }).into_response())
     }
+}
+
+/// `GET /repos/{name}/symbols?q=...&kind=...&language=...&path=...&max_results=100&offset=0`
+pub async fn symbols(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(params): Query<SymbolParams>,
+) -> Result<Json<SymbolSearchResponse>, ApiError> {
+    let repo_path = state
+        .repo_path(&name)
+        .await
+        .ok_or_else(|| ApiError::repo_not_found(&name))?;
+
+    if params.q.is_none() && params.path.is_none() {
+        return Err(ApiError::bad_request("'q' or 'path' parameter required"));
+    }
+
+    let (symbols, stats) = proxy::symbols(
+        state.daemon_bin(),
+        &repo_path,
+        params.q,
+        params.kind,
+        params.language,
+        params.path,
+        Some(params.max_results.min(500)),
+        Some(params.offset),
+    )
+    .await?;
+
+    Ok(Json(SymbolSearchResponse { symbols, stats }))
 }
 
 /// `GET /repos/{name}/files/{*path}?line_start=&line_end=`
@@ -333,6 +385,17 @@ mod tests {
         let app = test_app();
         let req = Request::builder()
             .uri("/api/v1/repos/nonexistent/status")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_symbols_unknown_repo_returns_404() {
+        let app = test_app();
+        let req = Request::builder()
+            .uri("/api/v1/repos/nonexistent/symbols?q=main")
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();

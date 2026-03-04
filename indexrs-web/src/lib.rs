@@ -95,6 +95,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/repos", get(api::list_repos))
         .route("/repos", post(api::add_repo))
         .route("/repos/{name}", delete(api::remove_repo))
+        .route("/repos/{name}/symbols", get(api::symbols))
         .route("/repos/{name}/search/stream", get(sse::search_stream))
         .route("/repos/{name}/status/stream", get(sse::status_stream));
 

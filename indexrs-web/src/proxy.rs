@@ -4,8 +4,8 @@ use serde::de::DeserializeOwned;
 
 use indexrs_daemon::types::DaemonRequest;
 use indexrs_daemon::{
-    FileResponse, HealthResponse, JsonSearchFrame, SearchStats, StatusResponse, ensure_daemon,
-    send_json_request,
+    FileResponse, HealthResponse, JsonSearchFrame, JsonSymbolsFrame, SearchStats, StatusResponse,
+    SymbolMatchResponse, SymbolsStats, ensure_daemon, send_json_request,
 };
 
 use crate::error::ApiError;
@@ -57,6 +57,49 @@ pub async fn search(
     });
 
     Ok((files, stats))
+}
+
+/// Send a JsonSymbols request to the daemon and return matched symbols + stats.
+#[allow(clippy::too_many_arguments)]
+pub async fn symbols(
+    daemon_bin: &Path,
+    repo_root: &Path,
+    query: Option<String>,
+    kind: Option<String>,
+    language: Option<String>,
+    path_filter: Option<String>,
+    max_results: Option<usize>,
+    offset: Option<usize>,
+) -> Result<(Vec<SymbolMatchResponse>, SymbolsStats), ApiError> {
+    let request = DaemonRequest::JsonSymbols {
+        query,
+        kind,
+        language,
+        path_filter,
+        max_results,
+        offset,
+    };
+
+    let result = send_request(daemon_bin, repo_root, &request).await?;
+
+    let mut symbols = Vec::new();
+    let mut stats = None;
+
+    for payload in result.payloads {
+        let frame: JsonSymbolsFrame = serde_json::from_str(&payload)
+            .map_err(|e| ApiError::internal(format!("failed to parse symbols frame: {e}")))?;
+        match frame {
+            JsonSymbolsFrame::Symbol(m) => symbols.push(m),
+            JsonSymbolsFrame::Stats { stats: s } => stats = Some(s),
+        }
+    }
+
+    let stats = stats.unwrap_or(SymbolsStats {
+        total: symbols.len(),
+        duration_ms: result.duration_ms,
+    });
+
+    Ok((symbols, stats))
 }
 
 /// Send a GetFile request to the daemon.
