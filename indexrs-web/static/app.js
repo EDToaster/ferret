@@ -241,9 +241,8 @@
         if (!toggle) return;
         var target = document.getElementById(toggle.getAttribute("data-toggle"));
         if (target) {
-            var isHidden = target.style.display === "none";
-            target.style.display = isHidden ? "" : "none";
-            toggle.classList.toggle("is-expanded", isHidden);
+            target.classList.toggle("expanded");
+            toggle.classList.toggle("is-expanded", target.classList.contains("expanded"));
         }
     });
 

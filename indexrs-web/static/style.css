@@ -83,6 +83,16 @@
     to   { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes modalFadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+@keyframes modalScaleIn {
+    from { opacity: 0; transform: scale(0.97) translateY(-4px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
 /* Reset & base */
 *, *::before, *::after {
     box-sizing: border-box;
@@ -513,6 +523,11 @@ mark {
 
 .help-overlay.visible {
     display: flex;
+    animation: modalFadeIn var(--duration-normal) var(--ease-out);
+}
+
+.help-overlay.visible .help-content {
+    animation: modalScaleIn var(--duration-slow) var(--ease-out);
 }
 
 .help-content {
@@ -1299,8 +1314,19 @@ mark {
 
 /* Segments detail table */
 .segments-table-wrap {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows var(--duration-slow) var(--ease-out);
+    overflow: hidden;
     border-top: 1px solid var(--border-subtle);
-    overflow-x: auto;
+}
+
+.segments-table-wrap.expanded {
+    grid-template-rows: 1fr;
+}
+
+.segments-table-wrap > * {
+    overflow: hidden;
 }
 
 .segments-table {
@@ -1620,6 +1646,11 @@ mark {
 
 .quickopen-overlay.visible {
     display: flex;
+    animation: modalFadeIn var(--duration-normal) var(--ease-out);
+}
+
+.quickopen-overlay.visible .quickopen-modal {
+    animation: modalScaleIn var(--duration-slow) var(--ease-out);
 }
 
 .quickopen-modal {
