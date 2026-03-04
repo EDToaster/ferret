@@ -22,9 +22,11 @@
         </select>
         {% endif %}
         <div class="header-spacer"></div>
-        <button class="theme-toggle" id="theme-toggle" type="button" title="Toggle theme">
-            <span class="theme-icon-sun" aria-hidden="true">&#9788;</span>
-            <span class="theme-icon-moon" aria-hidden="true">&#9790;</span>
+        <button class="theme-slider" id="theme-toggle" type="button" title="Toggle theme" aria-label="Toggle theme">
+            <span class="theme-slider-knob">
+                <span class="theme-icon-sun" aria-hidden="true">&#9788;</span>
+                <span class="theme-icon-moon" aria-hidden="true">&#9790;</span>
+            </span>
         </button>
         <span class="badge badge--ok" id="repo-status"
               hx-get="/repo-status" hx-trigger="change from:#repo-select"
