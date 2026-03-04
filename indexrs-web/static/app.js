@@ -207,8 +207,18 @@
         }
     });
 
+    // Show skeleton on search request start
+    document.addEventListener("htmx:beforeRequest", function(e) {
+        if (e.target && e.target.classList.contains("search-input")) {
+            var skeleton = document.getElementById("search-skeleton");
+            if (skeleton) skeleton.classList.add("active");
+        }
+    });
+
     // Reset selection when htmx swaps in new content
     document.addEventListener("htmx:afterSwap", function(e) {
+        var skeleton = document.getElementById("search-skeleton");
+        if (skeleton) skeleton.classList.remove("active");
         clearSelection();
         if (e.target && e.target.id === "quickopen-results") {
             quickopenSelectedIndex = -1;

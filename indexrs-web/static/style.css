@@ -596,6 +596,48 @@ mark {
     to { transform: rotate(360deg); }
 }
 
+/* Loading skeleton */
+@keyframes shimmer {
+    0%   { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+}
+
+.skeleton {
+    display: none;
+}
+
+.skeleton.active {
+    display: block;
+}
+
+.skeleton-card {
+    padding: 1.25rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.skeleton-header {
+    height: 0.85rem;
+    width: 55%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--bg-secondary) 25%, var(--bg-elevated) 50%, var(--bg-secondary) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s ease infinite;
+    margin-bottom: 0.65rem;
+}
+
+.skeleton-line {
+    height: 0.7rem;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--bg-secondary) 25%, var(--bg-elevated) 50%, var(--bg-secondary) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s ease infinite;
+    margin-bottom: 0.35rem;
+}
+
+.skeleton-line:nth-child(2) { width: 85%; animation-delay: 80ms; }
+.skeleton-line:nth-child(3) { width: 70%; animation-delay: 160ms; }
+.skeleton-line:nth-child(4) { width: 90%; animation-delay: 240ms; }
+
 /* File preview page */
 .file-preview-header {
     padding: 0.6rem 1.25rem;
