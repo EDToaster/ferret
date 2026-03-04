@@ -73,11 +73,15 @@
                     <div class="breakdown-bar-seg breakdown-bar--content" style="width: {{ repo.content_pct }}%"></div>
                     <div class="breakdown-bar-seg breakdown-bar--trigrams" style="width: {{ repo.trigrams_pct }}%"></div>
                     <div class="breakdown-bar-seg breakdown-bar--meta" style="width: {{ repo.meta_pct }}%"></div>
+                    <div class="breakdown-bar-seg breakdown-bar--tombstones" style="width: {{ repo.tombstones_pct }}%"></div>
+                    <div class="breakdown-bar-seg breakdown-bar--symbols" style="width: {{ repo.symbols_pct }}%"></div>
                 </div>
                 <div class="breakdown-legend">
                     <span class="breakdown-legend-item"><span class="breakdown-dot breakdown-dot--content"></span> Content {{ repo.content_bytes }}</span>
                     <span class="breakdown-legend-item"><span class="breakdown-dot breakdown-dot--trigrams"></span> Trigrams {{ repo.trigrams_bytes }}</span>
                     <span class="breakdown-legend-item"><span class="breakdown-dot breakdown-dot--meta"></span> Meta {{ repo.meta_paths_bytes }}</span>
+                    <span class="breakdown-legend-item"><span class="breakdown-dot breakdown-dot--tombstones"></span> Tombstones {{ repo.tombstones_bytes }}</span>
+                    <span class="breakdown-legend-item"><span class="breakdown-dot breakdown-dot--symbols"></span> Symbols {{ repo.symbols_bytes }}</span>
                 </div>
             </div>
             {% endif %}
@@ -93,6 +97,8 @@
                             <th>Content</th>
                             <th>Trigrams</th>
                             <th>Meta</th>
+                            <th>Tombstones</th>
+                            <th>Symbols</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -105,6 +111,8 @@
                             <td>{{ seg.content_bytes }}</td>
                             <td>{{ seg.trigrams_bytes }}</td>
                             <td>{{ seg.meta_paths_bytes }}</td>
+                            <td>{{ seg.tombstones_bytes }}</td>
+                            <td>{{ seg.symbols_bytes }}</td>
                         </tr>
                     {% endfor %}
                     </tbody>
