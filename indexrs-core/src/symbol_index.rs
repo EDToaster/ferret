@@ -114,7 +114,8 @@ impl SymbolIndexWriter {
         })?;
 
         // Build the name pool and collect entry data
-        let mut name_pool = Vec::new();
+        let total_name_bytes: usize = records.iter().map(|r| r.name.len()).sum();
+        let mut name_pool = Vec::with_capacity(total_name_bytes);
         let mut entries: Vec<(u32, u32, u32, u32, u16, u8, u32)> =
             Vec::with_capacity(records.len());
 
@@ -1059,5 +1060,30 @@ struct Config {
         // func_b from seg 0, func_c from seg 1 — both should appear
         assert!(results.iter().any(|m| m.name == "func_b"));
         assert!(results.iter().any(|m| m.name == "func_c"));
+    }
+
+    #[test]
+    fn test_symbol_writer_large_batch() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let records: Vec<SymbolRecord> = (0..1000)
+            .map(|i| SymbolRecord {
+                file_id: FileId(i / 10),
+                name: format!("symbol_{i}"),
+                kind: SymbolKind::Function,
+                line: i,
+                column: 0,
+            })
+            .collect();
+
+        SymbolIndexWriter::write(&records, dir.path()).unwrap();
+
+        let reader = SymbolIndexReader::open(dir.path()).unwrap();
+        assert_eq!(reader.symbol_count(), 1000);
+
+        let hit = reader.get(0).unwrap();
+        assert_eq!(hit.name, "symbol_0");
+        let hit = reader.get(999).unwrap();
+        assert_eq!(hit.name, "symbol_999");
     }
 }
