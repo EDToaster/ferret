@@ -277,9 +277,9 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
             web::run_web(port).await?;
             Ok(ExitCode::Success)
         }
-        Command::DaemonStart => {
+        Command::DaemonStart { skip_catchup } => {
             let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
-            daemon::start_daemon(&repo_root).await?;
+            daemon::start_daemon(&repo_root, skip_catchup).await?;
             Ok(ExitCode::Success)
         }
         #[cfg(feature = "mcp")]

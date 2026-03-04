@@ -93,7 +93,7 @@ fn run_live_indexing(
 ///
 /// The daemon loads the index from `repo_root/.indexrs/`, listens on the Unix
 /// socket, and serves requests until it has been idle for [`IDLE_TIMEOUT`].
-pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
+pub async fn start_daemon(repo_root: &Path, skip_catchup: bool) -> Result<(), IndexError> {
     let sock_path = indexrs_daemon::socket_path(repo_root);
 
     // Ensure the parent directory exists.
@@ -119,32 +119,36 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
         let repo = repo_root.to_path_buf();
         let idir = indexrs_dir.clone();
         tokio::spawn(async move {
-            // Phase 1: catch-up.
-            match tokio::task::spawn_blocking({
-                let repo = repo.clone();
-                let idir = idir.clone();
-                let mgr = mgr.clone();
-                move || indexrs_core::run_catchup(&repo, &idir, &mgr)
-            })
-            .await
-            {
-                Ok(Ok(changes)) => {
-                    if !changes.is_empty() {
-                        tracing::info!(
-                            change_count = changes.len(),
-                            "daemon catch-up applied changes"
-                        );
+            if !skip_catchup {
+                // Phase 1: catch-up.
+                match tokio::task::spawn_blocking({
+                    let repo = repo.clone();
+                    let idir = idir.clone();
+                    let mgr = mgr.clone();
+                    move || indexrs_core::run_catchup(&repo, &idir, &mgr)
+                })
+                .await
+                {
+                    Ok(Ok(changes)) => {
+                        if !changes.is_empty() {
+                            tracing::info!(
+                                change_count = changes.len(),
+                                "daemon catch-up applied changes"
+                            );
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(error = %e, "daemon catch-up failed");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "daemon catch-up task panicked");
                     }
                 }
-                Ok(Err(e)) => {
-                    tracing::warn!(error = %e, "daemon catch-up failed");
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "daemon catch-up task panicked");
-                }
+            } else {
+                tracing::info!("daemon skipping catch-up (--skip-catchup)");
             }
             cu.store(true, Ordering::SeqCst);
-            tracing::info!("daemon catch-up complete, starting live watcher");
+            tracing::info!("starting live watcher");
 
             // Phase 2: start HybridDetector for live changes.
             // Use std::thread::spawn (not spawn_blocking) so the blocking
@@ -1598,7 +1602,7 @@ mod tests {
 
         // Start daemon in background.
         let daemon_handle = tokio::spawn(async move {
-            start_daemon(&repo_root_clone).await.unwrap();
+            start_daemon(&repo_root_clone, false).await.unwrap();
         });
 
         // Give the daemon time to bind the socket.
@@ -1663,7 +1667,7 @@ mod tests {
         let repo_root_clone = repo_root.clone();
 
         let daemon_handle = tokio::spawn(async move {
-            start_daemon(&repo_root_clone).await.unwrap();
+            start_daemon(&repo_root_clone, false).await.unwrap();
         });
 
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1736,7 +1740,7 @@ mod tests {
         let repo_root_clone = repo_root.clone();
 
         let daemon_handle = tokio::spawn(async move {
-            start_daemon(&repo_root_clone).await.unwrap();
+            start_daemon(&repo_root_clone, false).await.unwrap();
         });
 
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1809,7 +1813,7 @@ mod tests {
         let repo_root_clone = repo_root.clone();
 
         let daemon_handle = tokio::spawn(async move {
-            start_daemon(&repo_root_clone).await.unwrap();
+            start_daemon(&repo_root_clone, false).await.unwrap();
         });
 
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1898,7 +1902,7 @@ mod tests {
 
         // Start daemon in-process.
         let daemon_handle = tokio::spawn(async move {
-            start_daemon(&repo_root_clone).await.unwrap();
+            start_daemon(&repo_root_clone, false).await.unwrap();
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -1971,7 +1975,7 @@ mod tests {
         let repo_root_clone = repo_root.clone();
 
         let daemon_handle = tokio::spawn(async move {
-            start_daemon(&repo_root_clone).await.unwrap();
+            start_daemon(&repo_root_clone, false).await.unwrap();
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -2164,7 +2168,7 @@ mod tests {
 
         // Start daemon in-process first.
         let daemon_handle = tokio::spawn(async move {
-            start_daemon(&repo_root_clone).await.unwrap();
+            start_daemon(&repo_root_clone, false).await.unwrap();
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -2235,7 +2239,7 @@ mod tests {
         let repo_root_clone = repo_root.clone();
 
         let daemon_handle = tokio::spawn(async move {
-            start_daemon(&repo_root_clone).await.unwrap();
+            start_daemon(&repo_root_clone, false).await.unwrap();
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -2338,7 +2342,7 @@ mod tests {
         let repo_root = dir.path().to_path_buf();
         let repo_root_clone = repo_root.clone();
         let daemon_handle = tokio::spawn(async move {
-            start_daemon(&repo_root_clone).await.unwrap();
+            start_daemon(&repo_root_clone, false).await.unwrap();
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -2450,7 +2454,7 @@ mod tests {
         let repo_root = dir.path().to_path_buf();
         let repo_root_clone = repo_root.clone();
         let daemon_handle = tokio::spawn(async move {
-            start_daemon(&repo_root_clone).await.unwrap();
+            start_daemon(&repo_root_clone, false).await.unwrap();
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -2541,7 +2545,7 @@ mod tests {
         let repo_root = dir.path().to_path_buf();
         let repo_root_clone = repo_root.clone();
         let daemon_handle = tokio::spawn(async move {
-            start_daemon(&repo_root_clone).await.unwrap();
+            start_daemon(&repo_root_clone, false).await.unwrap();
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -2620,7 +2624,7 @@ mod tests {
         let repo_root = dir.path().to_path_buf();
         let repo_root_clone = repo_root.clone();
         let daemon_handle = tokio::spawn(async move {
-            start_daemon(&repo_root_clone).await.unwrap();
+            start_daemon(&repo_root_clone, false).await.unwrap();
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -2701,7 +2705,7 @@ mod tests {
         let repo_root = dir.path().to_path_buf();
         let repo_root_clone = repo_root.clone();
         let daemon_handle = tokio::spawn(async move {
-            start_daemon(&repo_root_clone).await.unwrap();
+            start_daemon(&repo_root_clone, false).await.unwrap();
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
 

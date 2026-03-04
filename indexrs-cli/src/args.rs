@@ -195,7 +195,11 @@ pub enum Command {
 
     /// Internal: run as daemon process (hidden from help)
     #[command(name = "daemon-start", hide = true)]
-    DaemonStart,
+    DaemonStart {
+        /// Skip startup catch-up (used when reindex will run immediately after)
+        #[arg(long)]
+        skip_catchup: bool,
+    },
 
     /// Run as an MCP (Model Context Protocol) server over stdio
     #[cfg(feature = "mcp")]
