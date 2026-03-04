@@ -66,6 +66,33 @@ impl SearchResultsTemplate {
     }
 }
 
+/// A symbol result entry for the template.
+pub struct SymbolItem {
+    pub name: String,
+    pub kind: String,
+    pub path: String,
+    pub line: u32,
+    pub score: f64,
+}
+
+#[derive(Template)]
+#[template(path = "symbol_results.html")]
+struct SymbolResultsTemplate {
+    symbols: Vec<SymbolItem>,
+    repo: String,
+    query: String,
+    total: usize,
+    duration_ms: u64,
+}
+
+#[derive(Deserialize)]
+pub struct SymbolSearchParams {
+    q: Option<String>,
+    #[serde(rename = "repo-select")]
+    repo_select: Option<String>,
+    kind: Option<String>,
+}
+
 /// Per-segment detail for the repos overview template.
 pub struct SegmentDetailItem {
     pub name: String,
@@ -475,6 +502,106 @@ pub async fn file_preview(
         Err(e) => {
             tracing::error!("file preview proxy error: {e}");
             (StatusCode::BAD_GATEWAY, format!("Failed to load file: {e}")).into_response()
+        }
+    }
+}
+
+/// GET /symbol-results?q=...&repo-select=...&kind=...
+pub async fn symbol_results_fragment(
+    State(state): State<AppState>,
+    Query(params): Query<SymbolSearchParams>,
+) -> Response {
+    let query = params.q.unwrap_or_default();
+    let repo = params.repo_select.unwrap_or_default();
+    let kind = params.kind;
+
+    if query.is_empty() {
+        return render_template(SymbolResultsTemplate {
+            symbols: vec![],
+            repo,
+            query,
+            total: 0,
+            duration_ms: 0,
+        });
+    }
+
+    let repos_map = state.repos().await;
+    let repo_path = match repos_map.get(&repo) {
+        Some(p) => p.clone(),
+        None => {
+            return render_template(SymbolResultsTemplate {
+                symbols: vec![],
+                repo,
+                query,
+                total: 0,
+                duration_ms: 0,
+            });
+        }
+    };
+
+    let stream = match indexrs_daemon::ensure_daemon(state.daemon_bin(), &repo_path).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("daemon connect error: {e}");
+            return (StatusCode::BAD_GATEWAY, format!("Daemon unavailable: {e}")).into_response();
+        }
+    };
+
+    let request = indexrs_daemon::types::DaemonRequest::JsonSymbols {
+        query: Some(query.clone()),
+        kind,
+        language: None,
+        path_filter: None,
+        max_results: Some(50),
+        offset: None,
+    };
+
+    match indexrs_daemon::send_json_request(stream, &request).await {
+        Ok(result) => {
+            let mut symbols = Vec::new();
+            let mut total = 0usize;
+            let mut duration_ms = result.duration_ms;
+
+            for payload in &result.payloads {
+                if let Ok(frame) = serde_json::from_str::<indexrs_daemon::JsonSymbolsFrame>(payload)
+                {
+                    match frame {
+                        indexrs_daemon::JsonSymbolsFrame::Symbol(m) => {
+                            symbols.push(SymbolItem {
+                                name: m.name,
+                                kind: m.kind,
+                                path: m.path,
+                                line: m.line,
+                                score: m.score,
+                            });
+                        }
+                        indexrs_daemon::JsonSymbolsFrame::Stats { stats } => {
+                            total = stats.total;
+                            duration_ms = stats.duration_ms;
+                        }
+                    }
+                }
+            }
+
+            if total == 0 {
+                total = symbols.len();
+            }
+
+            render_template(SymbolResultsTemplate {
+                symbols,
+                repo,
+                query,
+                total,
+                duration_ms,
+            })
+        }
+        Err(e) => {
+            tracing::error!("symbol search proxy error: {e}");
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Symbol search failed: {e}"),
+            )
+                .into_response()
         }
     }
 }

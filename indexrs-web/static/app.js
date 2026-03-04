@@ -172,4 +172,40 @@
     document.addEventListener("DOMContentLoaded", function() {
         focusSearch();
     });
+
+    // Search mode toggle (text vs symbols)
+    var currentMode = "text";
+
+    function setSearchMode(mode) {
+        currentMode = mode;
+        var textBtn = document.getElementById("mode-text");
+        var symBtn = document.getElementById("mode-symbol");
+        var input = document.querySelector(".search-input");
+        if (!textBtn || !symBtn || !input) return;
+
+        textBtn.classList.toggle("mode-btn--active", mode === "text");
+        symBtn.classList.toggle("mode-btn--active", mode === "symbol");
+
+        if (mode === "symbol") {
+            input.setAttribute("hx-get", "/symbol-results");
+            input.setAttribute("placeholder", "Search symbols... (functions, structs, classes)");
+        } else {
+            input.setAttribute("hx-get", "/search-results");
+            input.setAttribute("placeholder", "Search code... (press / to focus, ? for help)");
+        }
+        // Re-process htmx attributes after changing them
+        if (window.htmx) htmx.process(input);
+
+        // Trigger a search with current value
+        if (input.value) {
+            htmx.trigger(input, "search");
+        }
+    }
+
+    document.addEventListener("click", function(e) {
+        var btn = e.target.closest(".mode-btn");
+        if (btn && btn.dataset.mode) {
+            setSearchMode(btn.dataset.mode);
+        }
+    });
 })();

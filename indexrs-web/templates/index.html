@@ -31,6 +31,10 @@
     </header>
 
     <div class="search-bar">
+        <div class="search-mode-toggle">
+            <button type="button" class="mode-btn mode-btn--active" id="mode-text" data-mode="text">Code</button>
+            <button type="button" class="mode-btn" id="mode-symbol" data-mode="symbol">Symbols</button>
+        </div>
         <input type="search" name="q" class="search-input"
                placeholder="Search code... (press / to focus, ? for help)"
                autocomplete="off" autofocus
@@ -58,6 +62,7 @@
                 <dt>Enter</dt><dd>Open selected file</dd>
                 <dt>n / p</dt><dd>Next / previous page</dd>
                 <dt>q</dt><dd>Back to results</dd>
+                <dt>@</dt><dd>Go to symbol (quick-open)</dd>
                 <dt>?</dt><dd>Toggle this help</dd>
             </dl>
         </div>

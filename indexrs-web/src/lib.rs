@@ -102,6 +102,7 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/", get(ui::index))
         .route("/search-results", get(ui::search_results_fragment))
+        .route("/symbol-results", get(ui::symbol_results_fragment))
         .route("/repo-status", get(ui::repo_status))
         .route("/repos", get(ui::repos_page))
         .route("/file/{repo}/{*path}", get(ui::file_preview))

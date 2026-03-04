@@ -1,0 +1,26 @@
+{% if !symbols.is_empty() %}
+<div class="stats-line">
+    {{ total }} symbol{% if total != 1 %}s{% endif %} ({{ duration_ms }}ms)
+</div>
+{% for sym in &symbols %}
+<div class="symbol-result">
+    <a href="/file/{{ repo }}/{{ sym.path }}#L{{ sym.line }}" class="symbol-link">
+        <span class="symbol-kind symbol-kind--{{ sym.kind }}">{{ sym.kind }}</span>
+        <span class="symbol-name">{{ sym.name }}</span>
+        <span class="symbol-path">{{ sym.path }}:{{ sym.line }}</span>
+    </a>
+</div>
+{% endfor %}
+{% else %}
+    {% if !query.is_empty() %}
+    <div class="empty-state">
+        <p>No symbols matching "{{ query }}"</p>
+        <p class="hint">Try a different query or symbol kind filter</p>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>Search for symbol definitions</p>
+        <p class="hint">Functions, structs, classes, traits, enums, and more</p>
+    </div>
+    {% endif %}
+{% endif %}
