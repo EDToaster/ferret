@@ -1159,10 +1159,29 @@ async fn handle_connection(
                 let index_bytes = indexrs_core::dir_size(&segments_dir);
                 let path_valid = repo_root.is_dir();
 
-                let status = if caught_up.load(Ordering::Relaxed) {
-                    "ready"
-                } else {
+                // Scan for temporary compaction segment dirs (.seg_*_tmp_*).
+                let temp_bytes = std::fs::read_dir(&segments_dir)
+                    .ok()
+                    .map(|entries| {
+                        entries
+                            .filter_map(|e| e.ok())
+                            .filter(|e| {
+                                let name = e.file_name();
+                                let name = name.to_string_lossy();
+                                name.starts_with(".seg_") && name.contains("_tmp_")
+                            })
+                            .map(|e| indexrs_core::dir_size(&e.path()))
+                            .sum::<u64>()
+                    })
+                    .unwrap_or(0);
+
+                let is_compacting = manager.is_compacting();
+                let status = if !caught_up.load(Ordering::Relaxed) {
                     "catching_up"
+                } else if is_compacting {
+                    "compacting"
+                } else {
+                    "ready"
                 };
 
                 let resp = StatusResponse {
@@ -1182,6 +1201,8 @@ async fn handle_connection(
                     symbols_bytes: agg_symbols_bytes,
                     segment_details,
                     language_extensions,
+                    temp_bytes,
+                    is_compacting,
                 };
                 let payload = serde_json::to_string(&resp)
                     .map_err(|e| IndexError::Io(std::io::Error::other(e)))?;

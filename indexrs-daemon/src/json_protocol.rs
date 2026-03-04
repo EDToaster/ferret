@@ -95,6 +95,12 @@ pub struct StatusResponse {
     /// Per-language file extension breakdown: vec of (language_name, vec of (extension, count)).
     #[serde(default)]
     pub language_extensions: Vec<(String, Vec<(String, usize)>)>,
+    /// Total bytes used by temporary compaction segments on disk.
+    #[serde(default)]
+    pub temp_bytes: u64,
+    /// Whether compaction is currently running.
+    #[serde(default)]
+    pub is_compacting: bool,
 }
 
 fn default_true() -> bool {
@@ -264,6 +270,8 @@ mod tests {
                     vec![("py".to_string(), 45), ("pyi".to_string(), 5)],
                 ),
             ],
+            temp_bytes: 0,
+            is_compacting: false,
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains(r#""status":"ready"#));

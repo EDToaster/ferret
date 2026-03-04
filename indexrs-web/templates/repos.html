@@ -19,7 +19,7 @@
             <div class="repo-card-header">
                 <span class="status-dot{% if !repo.online %} status-dot--offline{% endif %}" title="{{ repo.status }}"></span>
                 <span class="repo-card-name">{{ repo.name }}</span>
-                <span class="repo-card-status badge{% if repo.online %} badge--ok{% else %} badge--error{% endif %}">{{ repo.status }}</span>
+                <span class="repo-card-status badge{% if repo.status == "compacting" %} badge--warning{% elif repo.online %} badge--ok{% else %} badge--error{% endif %}">{{ repo.status }}</span>
             </div>
             <div class="repo-card-path">
                 {{ repo.path }}
@@ -50,6 +50,12 @@
                     <span class="repo-stat-label">tombstoned</span>
                 </span>
                 {% endif %}
+                {% if repo.has_temp_bytes %}
+                <span class="repo-stat">
+                    <span class="repo-stat-value repo-stat-value--warning">{{ repo.temp_bytes }}</span>
+                    <span class="repo-stat-label">temp segments</span>
+                </span>
+                {% endif %}
             </div>
             {% if repo.has_breakdown %}
             <div class="repo-card-breakdown">
@@ -61,11 +67,26 @@
                     <div class="breakdown-bar-seg breakdown-bar--symbols" style="width: {{ repo.symbols_pct }}%"></div>
                 </div>
                 <div class="breakdown-legend">
-                    <span class="breakdown-legend-item"><span class="breakdown-dot breakdown-dot--content"></span> Content {{ repo.content_bytes }}</span>
-                    <span class="breakdown-legend-item"><span class="breakdown-dot breakdown-dot--trigrams"></span> Trigrams {{ repo.trigrams_bytes }}</span>
-                    <span class="breakdown-legend-item"><span class="breakdown-dot breakdown-dot--meta"></span> Meta {{ repo.meta_paths_bytes }}</span>
-                    <span class="breakdown-legend-item"><span class="breakdown-dot breakdown-dot--tombstones"></span> Tombstones {{ repo.tombstones_bytes }}</span>
-                    <span class="breakdown-legend-item"><span class="breakdown-dot breakdown-dot--symbols"></span> Symbols {{ repo.symbols_bytes }}</span>
+                    <span class="breakdown-legend-item">
+                        <span class="breakdown-dot breakdown-dot--content"></span> Content {{ repo.content_bytes }}
+                        <span class="breakdown-tip">Zstd-compressed source file contents (content.zst)</span>
+                    </span>
+                    <span class="breakdown-legend-item">
+                        <span class="breakdown-dot breakdown-dot--trigrams"></span> Trigrams {{ repo.trigrams_bytes }}
+                        <span class="breakdown-tip">Trigram posting lists for substring search (trigrams.bin)</span>
+                    </span>
+                    <span class="breakdown-legend-item">
+                        <span class="breakdown-dot breakdown-dot--meta"></span> Meta {{ repo.meta_paths_bytes }}
+                        <span class="breakdown-tip">File metadata and path strings (meta.bin + paths.bin)</span>
+                    </span>
+                    <span class="breakdown-legend-item">
+                        <span class="breakdown-dot breakdown-dot--tombstones"></span> Tombstones {{ repo.tombstones_bytes }}
+                        <span class="breakdown-tip">Bitmaps tracking deleted files pending compaction (tombstones.bin)</span>
+                    </span>
+                    <span class="breakdown-legend-item">
+                        <span class="breakdown-dot breakdown-dot--symbols"></span> Symbols {{ repo.symbols_bytes }}
+                        <span class="breakdown-tip">Symbol index for function/type/variable lookup (symbols.bin + sym_trigrams.bin)</span>
+                    </span>
                 </div>
             </div>
             {% endif %}

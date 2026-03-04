@@ -143,6 +143,8 @@ pub struct RepoOverviewItem {
     pub symbols_pct: String,
     pub has_breakdown: bool,
     pub segment_details: Vec<SegmentDetailItem>,
+    pub temp_bytes: String,
+    pub has_temp_bytes: bool,
 }
 
 #[derive(Template)]
@@ -658,6 +660,7 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
             symbols_bytes_raw,
             segment_details_raw,
             lang_extensions,
+            temp_bytes_raw,
         ) = match sr_opt {
             Some(sr) => (
                 sr.status.clone(),
@@ -676,6 +679,7 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
                 sr.symbols_bytes,
                 sr.segment_details,
                 sr.language_extensions,
+                sr.temp_bytes,
             ),
             None => (
                 "offline".to_string(),
@@ -694,6 +698,7 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
                 0,
                 vec![],
                 vec![],
+                0,
             ),
         };
 
@@ -794,6 +799,8 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
             symbols_pct,
             has_breakdown: total_breakdown > 0,
             segment_details,
+            temp_bytes: format_bytes(temp_bytes_raw),
+            has_temp_bytes: temp_bytes_raw > 0,
         });
     }
 

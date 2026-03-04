@@ -14,7 +14,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rayon::prelude::*;
@@ -65,6 +65,18 @@ pub struct SegmentManager {
     /// Serializes write operations (add_segment, index_files, apply_changes,
     /// compact). Only one write operation can run at a time.
     write_lock: Mutex<()>,
+
+    /// Whether a compaction operation is currently running.
+    is_compacting: AtomicBool,
+}
+
+/// RAII guard that sets `is_compacting` back to `false` on drop.
+struct CompactingGuard<'a>(&'a AtomicBool);
+
+impl Drop for CompactingGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 impl SegmentManager {
@@ -133,6 +145,7 @@ impl SegmentManager {
             next_id: AtomicU32::new(max_id),
             state,
             write_lock: Mutex::new(()),
+            is_compacting: AtomicBool::new(false),
         })
     }
 
@@ -157,6 +170,11 @@ impl SegmentManager {
     /// a frozen view that remains valid regardless of concurrent writes.
     pub fn snapshot(&self) -> SegmentList {
         self.state.snapshot()
+    }
+
+    /// Returns `true` if a compaction operation is currently running.
+    pub fn is_compacting(&self) -> bool {
+        self.is_compacting.load(Ordering::Acquire)
     }
 
     /// Add a pre-built segment to the active segment list.
@@ -844,6 +862,8 @@ impl SegmentManager {
     ///   A value of 0 means no limit (equivalent to `compact()`).
     pub fn compact_with_budget(&self, max_segment_bytes: usize) -> Result<(), IndexError> {
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.is_compacting.store(true, Ordering::Release);
+        let _compacting_guard = CompactingGuard(&self.is_compacting);
         let current_segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
 
         if current_segments.is_empty() {

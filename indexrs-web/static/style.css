@@ -364,6 +364,12 @@ mark {
     border: 1px solid rgba(220, 38, 38, 0.2);
 }
 
+.badge--warning {
+    background: rgba(217, 119, 6, 0.1);
+    color: #d97706;
+    border: 1px solid rgba(217, 119, 6, 0.2);
+}
+
 .badge--link {
     color: var(--fg-dim);
     border: 1px solid var(--border);
@@ -385,6 +391,11 @@ mark {
 [data-theme="dark"] .badge--error {
     background: rgba(248, 113, 113, 0.1);
     border-color: rgba(248, 113, 113, 0.2);
+}
+[data-theme="dark"] .badge--warning {
+    background: rgba(251, 191, 36, 0.1);
+    border-color: rgba(251, 191, 36, 0.2);
+    color: #fbbf24;
 }
 
 /* Back link */
@@ -593,7 +604,7 @@ mark {
 
 /* Repos overview page */
 .repos-page {
-    max-width: 640px;
+    max-width: 960px;
     margin: 0 auto;
     padding: 0.75rem 1.25rem 2rem;
 }
@@ -966,6 +977,54 @@ mark {
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
+    position: relative;
+    cursor: default;
+}
+
+.breakdown-tip {
+    display: block;
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%) translateY(4px);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.3rem 0.5rem;
+    font-size: 0.62rem;
+    color: var(--fg-dim);
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease, transform 120ms ease;
+    z-index: 10;
+    box-shadow: var(--shadow);
+}
+
+.breakdown-legend-item:hover .breakdown-tip {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+.breakdown-tip::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    margin-left: -4px;
+    border: 4px solid transparent;
+    border-top-color: var(--border);
+}
+
+.breakdown-tip::before {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    margin-left: -3px;
+    border: 3px solid transparent;
+    border-top-color: var(--bg-elevated);
+    z-index: 1;
 }
 
 .breakdown-dot {
