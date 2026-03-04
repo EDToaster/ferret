@@ -37,6 +37,8 @@ use std::path::Path;
 
 use memmap2::Mmap;
 
+use rayon::prelude::*;
+
 use crate::error::IndexError;
 use crate::index_reader::TrigramIndexReader;
 use crate::index_state::SegmentList;
@@ -482,83 +484,83 @@ pub fn search_symbols(
     query: &str,
     options: &SymbolSearchOptions,
 ) -> Result<Vec<SymbolMatch>, IndexError> {
-    // Fold query for scoring
     let folded_query: Vec<u8> = query.bytes().map(ascii_fold_byte).collect();
 
-    // Collect matches from all segments (newest first to support dedup)
-    let mut all_matches: Vec<SymbolMatch> = Vec::new();
-
-    // Iterate segments sequentially from newest (highest ID) to oldest.
-    // Sequential (not rayon) because dedup uses shared mutable HashSet.
+    // Sort segments by ID descending (newest first) for dedup ordering
     let mut segments_by_id: Vec<_> = snapshot.iter().collect();
     segments_by_id.sort_by(|a, b| b.segment_id().0.cmp(&a.segment_id().0));
 
-    // Track seen (path, name, line) for dedup -- newest segment wins
+    // Phase 1: Search each segment in parallel
+    let per_segment_results: Vec<Result<Vec<SymbolMatch>, IndexError>> = segments_by_id
+        .par_iter()
+        .map(|segment| {
+            let symbol_reader = match segment.symbol_reader() {
+                Some(r) => r,
+                None => return Ok(Vec::new()),
+            };
+
+            let tombstones = segment.load_tombstones()?;
+            let hits = symbol_reader.search_filtered(query, options.kind, None)?;
+
+            let mut matches = Vec::new();
+            for hit in hits {
+                if tombstones.contains(hit.file_id) {
+                    continue;
+                }
+
+                let meta = match segment.get_metadata(hit.file_id)? {
+                    Some(m) => m,
+                    None => continue,
+                };
+
+                if let Some(ref lang) = options.language
+                    && meta.language != *lang
+                {
+                    continue;
+                }
+
+                if let Some(ref pattern) = options.path_filter
+                    && !meta.path.contains(pattern.as_str())
+                {
+                    continue;
+                }
+
+                let folded_name: Vec<u8> = hit.name.bytes().map(ascii_fold_byte).collect();
+                let score = if folded_name == folded_query {
+                    1.0
+                } else if folded_name.starts_with(&folded_query) {
+                    0.8
+                } else {
+                    0.5
+                };
+
+                matches.push(SymbolMatch {
+                    name: hit.name,
+                    kind: hit.kind,
+                    path: meta.path,
+                    line: hit.line,
+                    column: hit.column,
+                    file_id: hit.file_id,
+                    segment_id: segment.segment_id(),
+                    score,
+                });
+            }
+            Ok(matches)
+        })
+        .collect();
+
+    // Phase 2: Sequential merge with dedup (newest-first order preserved)
+    let mut all_matches: Vec<SymbolMatch> = Vec::new();
     let mut seen: std::collections::HashSet<(String, String, u32)> =
         std::collections::HashSet::new();
 
-    for segment in segments_by_id {
-        let symbol_reader = match segment.symbol_reader() {
-            Some(r) => r,
-            None => continue,
-        };
-
-        let tombstones = segment.load_tombstones()?;
-
-        let hits = symbol_reader.search_filtered(query, options.kind, None)?;
-
-        for hit in hits {
-            // Skip tombstoned files
-            if tombstones.contains(hit.file_id) {
-                continue;
+    for result in per_segment_results {
+        let matches = result?;
+        for m in matches {
+            let dedup_key = (m.path.clone(), m.name.clone(), m.line);
+            if seen.insert(dedup_key) {
+                all_matches.push(m);
             }
-
-            // Get file metadata for path and language
-            let meta = match segment.get_metadata(hit.file_id)? {
-                Some(m) => m,
-                None => continue,
-            };
-
-            // Language filter
-            if let Some(ref lang) = options.language
-                && meta.language != *lang
-            {
-                continue;
-            }
-
-            // Path glob filter (simple contains check)
-            if let Some(ref pattern) = options.path_filter
-                && !meta.path.contains(pattern.as_str())
-            {
-                continue;
-            }
-
-            // Dedup: (path, name, line) -- newest segment wins
-            let dedup_key = (meta.path.clone(), hit.name.clone(), hit.line);
-            if !seen.insert(dedup_key) {
-                continue;
-            }
-
-            // Score the match
-            let folded_name: Vec<u8> = hit.name.bytes().map(ascii_fold_byte).collect();
-            let score = if folded_name == folded_query {
-                1.0
-            } else if folded_name.starts_with(&folded_query) {
-                0.8
-            } else {
-                0.5
-            };
-
-            all_matches.push(SymbolMatch {
-                name: hit.name,
-                kind: hit.kind,
-                path: meta.path,
-                line: hit.line,
-                column: hit.column,
-                file_id: hit.file_id,
-                segment_id: segment.segment_id(),
-                score,
-            });
         }
     }
 
@@ -999,5 +1001,63 @@ struct Config {
         let names: Vec<&str> = results.iter().map(|m| m.name.as_str()).collect();
         assert!(names.contains(&"process"));
         assert!(names.contains(&"process_data"));
+    }
+
+    #[test]
+    fn test_search_symbols_multi_segment_parallel_dedup() {
+        use crate::segment::{InputFile, SegmentWriter};
+        use crate::types::SegmentId;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        // Segment 0 (older): has func_a, func_b
+        let files_0 = vec![InputFile {
+            path: "src/a.rs".to_string(),
+            content: b"fn func_a() {}\nfn func_b() {}\n".to_vec(),
+            mtime: 1700000000,
+        }];
+        let seg0 = SegmentWriter::new(&base_dir, SegmentId(0))
+            .build(files_0)
+            .unwrap();
+
+        // Segment 1 (newer): has func_a (updated), func_c
+        let files_1 = vec![InputFile {
+            path: "src/a.rs".to_string(),
+            content: b"fn func_a() { /* v2 */ }\nfn func_c() {}\n".to_vec(),
+            mtime: 1700000100,
+        }];
+        let seg1 = SegmentWriter::new(&base_dir, SegmentId(1))
+            .build(files_1)
+            .unwrap();
+
+        let snapshot: crate::index_state::SegmentList =
+            Arc::new(vec![Arc::new(seg0), Arc::new(seg1)]);
+
+        let options = SymbolSearchOptions {
+            max_results: 100,
+            ..Default::default()
+        };
+
+        let results = search_symbols(&snapshot, "func", &options).unwrap();
+
+        // func_a should come from segment 1 (newest wins dedup)
+        let func_a: Vec<_> = results.iter().filter(|m| m.name == "func_a").collect();
+        assert_eq!(
+            func_a.len(),
+            1,
+            "func_a should appear exactly once (deduped)"
+        );
+        assert_eq!(
+            func_a[0].segment_id,
+            SegmentId(1),
+            "func_a should come from newest segment"
+        );
+
+        // func_b from seg 0, func_c from seg 1 — both should appear
+        assert!(results.iter().any(|m| m.name == "func_b"));
+        assert!(results.iter().any(|m| m.name == "func_c"));
     }
 }
