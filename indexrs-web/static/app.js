@@ -265,6 +265,7 @@
         var textBtn = document.getElementById("mode-text");
         var symBtn = document.getElementById("mode-symbol");
         var input = document.querySelector(".search-input");
+        var repoSelect = document.getElementById("repo-select");
         if (!textBtn || !symBtn || !input) return;
 
         textBtn.classList.toggle("mode-btn--active", mode === "text");
@@ -273,15 +274,15 @@
         if (mode === "symbol") {
             input.setAttribute("hx-get", "/symbol-results");
             input.setAttribute("placeholder", "Search symbols... (functions, structs, classes)");
+            if (repoSelect) repoSelect.setAttribute("hx-get", "/symbol-results");
         } else {
             input.setAttribute("hx-get", "/search-results");
             input.setAttribute("placeholder", "Search code... (press / to focus, ? for help)");
+            if (repoSelect) repoSelect.setAttribute("hx-get", "/search-results");
         }
-        // Re-process htmx attributes after changing them
-        if (window.htmx) htmx.process(input);
 
         // Trigger a search with current value
-        if (input.value) {
+        if (input.value && window.htmx) {
             htmx.trigger(input, "search");
         }
     }
