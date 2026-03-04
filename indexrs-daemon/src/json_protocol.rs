@@ -43,6 +43,10 @@ pub struct SegmentInfo {
     pub meta_paths_bytes: u64,
     pub content_bytes: u64,
     pub tombstones_bytes: u64,
+    #[serde(default)]
+    pub symbols_bytes: u64,
+    #[serde(default)]
+    pub sym_trigrams_bytes: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -77,6 +81,12 @@ pub struct StatusResponse {
     /// Aggregate meta.bin + paths.bin size in bytes.
     #[serde(default)]
     pub meta_paths_bytes: u64,
+    /// Aggregate tombstones.bin size in bytes.
+    #[serde(default)]
+    pub tombstones_bytes: u64,
+    /// Aggregate symbols.bin + sym_trigrams.bin size in bytes.
+    #[serde(default)]
+    pub symbols_bytes: u64,
     /// Per-segment breakdown.
     #[serde(default)]
     pub segment_details: Vec<SegmentInfo>,
@@ -200,6 +210,8 @@ mod tests {
             content_bytes: 3000,
             trigrams_bytes: 1500,
             meta_paths_bytes: 500,
+            tombstones_bytes: 200,
+            symbols_bytes: 100,
             segment_details: vec![],
             language_extensions: vec![
                 ("Rust".to_string(), vec![("rs".to_string(), 100)]),
