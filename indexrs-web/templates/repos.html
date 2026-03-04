@@ -108,8 +108,8 @@
                     </thead>
                     <tbody>
                     {% for seg in &repo.segment_details %}
-                        <tr{% if seg.tombstoned_count > 0 %} class="seg-row--has-tombstones"{% endif %}>
-                            <td class="seg-name">{{ seg.name }}</td>
+                        <tr{% if seg.temporary %} class="seg-row--temp"{% elif seg.tombstoned_count > 0 %} class="seg-row--has-tombstones"{% endif %}>
+                            <td class="seg-name">{{ seg.name }}{% if seg.temporary %} <span class="seg-badge-temp">building</span>{% endif %}</td>
                             <td>{{ seg.entry_count }}</td>
                             <td>{{ seg.tombstoned_count }}</td>
                             <td>{{ seg.total_size }}</td>

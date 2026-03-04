@@ -226,14 +226,43 @@
     }
 
     // Toggle collapsible sections (e.g. segment detail table)
+    // Persist expanded state in localStorage under "expanded-sections" (JSON array of IDs).
+    var EXPANDED_KEY = "expanded-sections";
+    function getExpandedSections() {
+        try { return JSON.parse(localStorage.getItem(EXPANDED_KEY)) || []; }
+        catch (_) { return []; }
+    }
+    function saveExpandedSections(ids) {
+        localStorage.setItem(EXPANDED_KEY, JSON.stringify(ids));
+    }
+
+    // Restore previously expanded sections on page load.
+    getExpandedSections().forEach(function(id) {
+        var target = document.getElementById(id);
+        var toggle = document.querySelector('[data-toggle="' + id + '"]');
+        if (target) {
+            target.style.display = "";
+            if (toggle) toggle.classList.add("is-expanded");
+        }
+    });
+
     document.addEventListener("click", function(e) {
         var toggle = e.target.closest("[data-toggle]");
         if (!toggle) return;
-        var target = document.getElementById(toggle.getAttribute("data-toggle"));
+        var id = toggle.getAttribute("data-toggle");
+        var target = document.getElementById(id);
         if (target) {
             var isHidden = target.style.display === "none";
             target.style.display = isHidden ? "" : "none";
             toggle.classList.toggle("is-expanded", isHidden);
+
+            var expanded = getExpandedSections();
+            if (isHidden) {
+                if (expanded.indexOf(id) === -1) expanded.push(id);
+            } else {
+                expanded = expanded.filter(function(x) { return x !== id; });
+            }
+            saveExpandedSections(expanded);
         }
     });
 

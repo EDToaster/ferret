@@ -104,6 +104,7 @@ pub struct SegmentDetailItem {
     pub meta_paths_bytes: String,
     pub tombstones_bytes: String,
     pub symbols_bytes: String,
+    pub temporary: bool,
 }
 
 /// Language info with per-extension breakdown for tooltips.
@@ -766,6 +767,7 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
                     meta_paths_bytes: format_bytes(s.meta_paths_bytes),
                     tombstones_bytes: format_bytes(s.tombstones_bytes),
                     symbols_bytes: format_bytes(s.symbols_bytes + s.sym_trigrams_bytes),
+                    temporary: s.temporary,
                 }
             })
             .collect();
