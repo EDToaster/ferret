@@ -2509,8 +2509,6 @@ mod tests {
 
     #[test]
     fn test_apply_changes_with_progress_skips_unchanged_files() {
-        use crate::reindex_progress::ReindexProgress;
-
         let dir = tempfile::tempdir().unwrap();
         let base_dir = dir.path().join(".indexrs");
         let repo_dir = dir.path().join("repo");
