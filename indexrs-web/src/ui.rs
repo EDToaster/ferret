@@ -588,13 +588,7 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
                     format!("{s:.1}"),
                 )
             } else {
-                (
-                    "0".into(),
-                    "0".into(),
-                    "0".into(),
-                    "0".into(),
-                    "0".into(),
-                )
+                ("0".into(), "0".into(), "0".into(), "0".into(), "0".into())
             };
 
         let segment_details: Vec<SegmentDetailItem> = segment_details_raw
