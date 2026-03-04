@@ -207,18 +207,8 @@
         }
     });
 
-    // Show skeleton on search request start
-    document.addEventListener("htmx:beforeRequest", function(e) {
-        if (e.target && e.target.classList.contains("search-input")) {
-            var skeleton = document.getElementById("search-skeleton");
-            if (skeleton) skeleton.classList.add("active");
-        }
-    });
-
     // Reset selection when htmx swaps in new content
     document.addEventListener("htmx:afterSwap", function(e) {
-        var skeleton = document.getElementById("search-skeleton");
-        if (skeleton) skeleton.classList.remove("active");
         clearSelection();
         if (e.target && e.target.id === "quickopen-results") {
             quickopenSelectedIndex = -1;
@@ -241,8 +231,9 @@
         if (!toggle) return;
         var target = document.getElementById(toggle.getAttribute("data-toggle"));
         if (target) {
-            target.classList.toggle("expanded");
-            toggle.classList.toggle("is-expanded", target.classList.contains("expanded"));
+            var isHidden = target.style.display === "none";
+            target.style.display = isHidden ? "" : "none";
+            toggle.classList.toggle("is-expanded", isHidden);
         }
     });
 
