@@ -260,6 +260,18 @@
     // Search mode toggle (text vs symbols)
     var currentMode = "text";
 
+    function searchUrl() {
+        return currentMode === "symbol" ? "/symbol-results" : "/search-results";
+    }
+
+    // Override the request URL based on current search mode
+    document.addEventListener("htmx:configRequest", function(e) {
+        var elt = e.detail.elt;
+        if (elt.classList.contains("search-input") || elt.id === "repo-select") {
+            e.detail.path = searchUrl();
+        }
+    });
+
     function setSearchMode(mode) {
         currentMode = mode;
         var textBtn = document.getElementById("mode-text");
@@ -271,19 +283,15 @@
         textBtn.classList.toggle("mode-btn--active", mode === "text");
         symBtn.classList.toggle("mode-btn--active", mode === "symbol");
 
-        if (mode === "symbol") {
-            input.setAttribute("hx-get", "/symbol-results");
-            input.setAttribute("placeholder", "Search symbols... (functions, structs, classes)");
-            if (repoSelect) repoSelect.setAttribute("hx-get", "/symbol-results");
-        } else {
-            input.setAttribute("hx-get", "/search-results");
-            input.setAttribute("placeholder", "Search code... (press / to focus, ? for help)");
-            if (repoSelect) repoSelect.setAttribute("hx-get", "/search-results");
-        }
+        input.setAttribute("placeholder", mode === "symbol"
+            ? "Search symbols... (functions, structs, classes)"
+            : "Search code... (press / to focus, ? for help)");
 
-        // Trigger a search with current value
+        // Re-search with the new endpoint
         if (input.value && window.htmx) {
-            htmx.trigger(input, "search");
+            var params = "q=" + encodeURIComponent(input.value);
+            if (repoSelect) params += "&repo-select=" + encodeURIComponent(repoSelect.value);
+            htmx.ajax("GET", searchUrl() + "?" + params, {target: "#results"});
         }
     }
 
