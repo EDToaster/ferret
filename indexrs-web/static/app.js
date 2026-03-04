@@ -230,7 +230,11 @@
         var toggle = e.target.closest("[data-toggle]");
         if (!toggle) return;
         var target = document.getElementById(toggle.getAttribute("data-toggle"));
-        if (target) target.style.display = target.style.display === "none" ? "" : "none";
+        if (target) {
+            var isHidden = target.style.display === "none";
+            target.style.display = isHidden ? "" : "none";
+            toggle.classList.toggle("is-expanded", isHidden);
+        }
     });
 
     // Close quick-open on backdrop click

@@ -563,7 +563,7 @@ mark {
     width: 2.4rem;
     height: 1.3rem;
     padding: 0;
-    border: 1px solid var(--border);
+    border: 1px solid var(--fg-muted);
     border-radius: 0.65rem;
     background: var(--bg-secondary);
     cursor: pointer;
@@ -893,16 +893,29 @@ mark {
     padding: 0.15rem 0.35rem;
     margin: -0.15rem 0;
     border-radius: var(--radius);
-    transition: background var(--transition);
+    border: 1px solid var(--fg-muted);
+    transition: background var(--transition), border-color var(--transition);
 }
 
 .repo-stat--clickable:hover {
     background: var(--bg-elevated);
+    border-color: var(--accent);
+}
+
+.repo-stat--clickable:hover .repo-stat-value,
+.repo-stat--clickable:hover .repo-stat-label {
+    color: var(--accent);
 }
 
 .repo-stat--clickable .repo-stat-label::after {
-    content: " \25BE"; /* down triangle */
-    font-size: 0.6rem;
+    content: "\25BC"; /* down triangle */
+    margin-left: 0.2rem;
+    display: inline-block;
+    transition: transform 150ms ease;
+}
+
+.repo-stat--clickable.is-expanded .repo-stat-label::after {
+    transform: rotate(180deg);
 }
 
 /* Warning value (tombstone count) */
