@@ -28,12 +28,17 @@ pub async fn try_connect(repo_root: &Path) -> Option<UnixStream> {
 /// Spawn a daemon as a detached background process.
 ///
 /// `daemon_bin` is the path to the binary that accepts `daemon-start --repo <path>`.
-pub fn spawn_daemon_process(daemon_bin: &Path, repo_root: &Path) -> Result<(), IndexError> {
-    std::process::Command::new(daemon_bin)
-        .arg("daemon-start")
-        .arg("--repo")
-        .arg(repo_root)
-        .stdin(std::process::Stdio::null())
+pub fn spawn_daemon_process(
+    daemon_bin: &Path,
+    repo_root: &Path,
+    skip_catchup: bool,
+) -> Result<(), IndexError> {
+    let mut cmd = std::process::Command::new(daemon_bin);
+    cmd.arg("daemon-start").arg("--repo").arg(repo_root);
+    if skip_catchup {
+        cmd.arg("--skip-catchup");
+    }
+    cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -44,14 +49,18 @@ pub fn spawn_daemon_process(daemon_bin: &Path, repo_root: &Path) -> Result<(), I
 /// Connect to a running daemon, or spawn one and wait for it to be ready.
 ///
 /// `daemon_bin` is the path to the binary that accepts `daemon-start --repo <path>`.
-pub async fn ensure_daemon(daemon_bin: &Path, repo_root: &Path) -> Result<UnixStream, IndexError> {
+pub async fn ensure_daemon(
+    daemon_bin: &Path,
+    repo_root: &Path,
+    skip_catchup: bool,
+) -> Result<UnixStream, IndexError> {
     // Fast path: daemon already running.
     if let Some(stream) = try_connect(repo_root).await {
         return Ok(stream);
     }
 
     // Spawn a new daemon process.
-    spawn_daemon_process(daemon_bin, repo_root)?;
+    spawn_daemon_process(daemon_bin, repo_root, skip_catchup)?;
 
     // Poll until the socket is ready or timeout.
     let deadline = tokio::time::Instant::now() + DAEMON_STARTUP_TIMEOUT;

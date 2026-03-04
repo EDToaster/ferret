@@ -216,7 +216,7 @@ pub async fn refresh_index(
         .ok_or_else(|| ApiError::repo_not_found(&name))?;
 
     // Connect to daemon and send Reindex request (fire-and-forget).
-    let stream = indexrs_daemon::ensure_daemon(state.daemon_bin(), &repo_path)
+    let stream = indexrs_daemon::ensure_daemon(state.daemon_bin(), &repo_path, false)
         .await
         .map_err(|e| ApiError::service_unavailable(format!("daemon unavailable: {e}")))?;
 

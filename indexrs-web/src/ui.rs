@@ -249,7 +249,7 @@ async fn proxy_search(
     page: usize,
     per_page: usize,
 ) -> Result<(Vec<FileMatch>, indexrs_daemon::SearchStats), String> {
-    let stream = indexrs_daemon::ensure_daemon(daemon_bin, repo_path)
+    let stream = indexrs_daemon::ensure_daemon(daemon_bin, repo_path, false)
         .await
         .map_err(|e| format!("daemon connect: {e}"))?;
 
@@ -296,7 +296,7 @@ async fn proxy_get_file(
     repo_path: &std::path::Path,
     file_path: &str,
 ) -> Result<indexrs_daemon::FileResponse, String> {
-    let stream = indexrs_daemon::ensure_daemon(daemon_bin, repo_path)
+    let stream = indexrs_daemon::ensure_daemon(daemon_bin, repo_path, false)
         .await
         .map_err(|e| format!("daemon connect: {e}"))?;
 
@@ -323,7 +323,7 @@ async fn proxy_status_raw(
     daemon_bin: &std::path::Path,
     repo_path: &std::path::Path,
 ) -> Result<indexrs_daemon::StatusResponse, String> {
-    let stream = indexrs_daemon::ensure_daemon(daemon_bin, repo_path)
+    let stream = indexrs_daemon::ensure_daemon(daemon_bin, repo_path, false)
         .await
         .map_err(|e| format!("daemon connect: {e}"))?;
 
@@ -563,7 +563,7 @@ pub async fn symbol_results_fragment(
         }
     };
 
-    let stream = match indexrs_daemon::ensure_daemon(state.daemon_bin(), &repo_path).await {
+    let stream = match indexrs_daemon::ensure_daemon(state.daemon_bin(), &repo_path, false).await {
         Ok(s) => s,
         Err(e) => {
             tracing::error!("daemon connect error: {e}");
@@ -812,7 +812,7 @@ pub async fn symbol_outline_fragment(
         None => return render_template(SymbolOutlineTemplate { symbols: vec![] }),
     };
 
-    let stream = match indexrs_daemon::ensure_daemon(state.daemon_bin(), &repo_path).await {
+    let stream = match indexrs_daemon::ensure_daemon(state.daemon_bin(), &repo_path, false).await {
         Ok(s) => s,
         Err(_) => return render_template(SymbolOutlineTemplate { symbols: vec![] }),
     };

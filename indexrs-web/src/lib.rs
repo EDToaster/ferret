@@ -123,7 +123,7 @@ pub async fn start_server(
     // Ensure daemons are running for all registered repos.
     let repos_snapshot = state.repos().await;
     for (name, path) in &repos_snapshot {
-        match indexrs_daemon::ensure_daemon(state.daemon_bin(), path).await {
+        match indexrs_daemon::ensure_daemon(state.daemon_bin(), path, false).await {
             Ok(_stream) => tracing::info!("daemon ready for repo '{name}'"),
             Err(e) => tracing::warn!("failed to start daemon for repo '{name}': {e}"),
         }

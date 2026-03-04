@@ -49,7 +49,7 @@ pub async fn search_stream(
         .ok_or_else(|| (StatusCode::BAD_REQUEST, "missing or empty query 'q'".into()))?;
 
     // Connect to daemon.
-    let stream = indexrs_daemon::ensure_daemon(state.daemon_bin(), &repo_path)
+    let stream = indexrs_daemon::ensure_daemon(state.daemon_bin(), &repo_path, false)
         .await
         .map_err(|e| {
             (
@@ -146,7 +146,7 @@ pub async fn status_stream(
         loop {
             interval.tick().await;
 
-            let status_json = match indexrs_daemon::ensure_daemon(&daemon_bin, &repo_path).await {
+            let status_json = match indexrs_daemon::ensure_daemon(&daemon_bin, &repo_path, false).await {
                 Ok(stream) => {
                     let request = indexrs_daemon::DaemonRequest::Status;
                     match indexrs_daemon::send_json_request(stream, &request).await {

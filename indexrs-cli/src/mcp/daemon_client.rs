@@ -75,7 +75,7 @@ impl DaemonClient {
         if guard.is_none() {
             let daemon_bin = std::env::current_exe()
                 .map_err(|e| format!("cannot determine current executable: {e}"))?;
-            let stream = ensure_daemon(&daemon_bin, &self.repo_root)
+            let stream = ensure_daemon(&daemon_bin, &self.repo_root, false)
                 .await
                 .map_err(|e| format!("failed to connect to daemon: {e}"))?;
             *guard = Some(stream);

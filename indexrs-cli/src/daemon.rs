@@ -1403,9 +1403,9 @@ async fn handle_connection(
 }
 
 /// Connect to a running daemon, or spawn one and wait for it to be ready.
-pub async fn ensure_daemon(repo_root: &Path) -> Result<UnixStream, IndexError> {
+pub async fn ensure_daemon(repo_root: &Path, skip_catchup: bool) -> Result<UnixStream, IndexError> {
     let exe = std::env::current_exe().map_err(IndexError::Io)?;
-    indexrs_daemon::client::ensure_daemon(&exe, repo_root).await
+    indexrs_daemon::client::ensure_daemon(&exe, repo_root, skip_catchup).await
 }
 
 /// Send a request to the daemon and stream results to the writer.
@@ -1414,7 +1414,7 @@ pub async fn run_via_daemon<W: std::io::Write>(
     request: DaemonRequest,
     writer: &mut StreamingWriter<W>,
 ) -> Result<ExitCode, IndexError> {
-    let stream = ensure_daemon(repo_root).await?;
+    let stream = ensure_daemon(repo_root, false).await?;
     let (reader, mut sock_writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
@@ -2173,7 +2173,9 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // ensure_daemon should find the running daemon.
-        let stream = ensure_daemon(&repo_root).await.expect("should connect");
+        let stream = ensure_daemon(&repo_root, false)
+            .await
+            .expect("should connect");
 
         // Verify with Ping/Pong.
         let (reader, mut writer) = stream.into_split();

@@ -157,7 +157,7 @@ async fn send_request(
     repo_root: &Path,
     request: &DaemonRequest,
 ) -> Result<indexrs_daemon::JsonResult, ApiError> {
-    let stream = ensure_daemon(daemon_bin, repo_root)
+    let stream = ensure_daemon(daemon_bin, repo_root, false)
         .await
         .map_err(|e| ApiError::service_unavailable(format!("daemon unavailable: {e}")))?;
 

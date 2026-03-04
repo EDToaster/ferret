@@ -15,7 +15,7 @@ use indexrs_daemon::types::DaemonRequest;
 pub async fn run_reindex_with_progress(
     repo_root: &std::path::Path,
 ) -> Result<ExitCode, IndexError> {
-    let stream = ensure_daemon(repo_root).await?;
+    let stream = ensure_daemon(repo_root, true).await?;
     let (reader, mut sock_writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
