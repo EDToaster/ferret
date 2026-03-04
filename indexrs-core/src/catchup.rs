@@ -13,7 +13,7 @@ use crate::error::Result;
 use crate::git_diff::GitChangeDetector;
 use crate::hash_diff::hash_diff;
 use crate::reindex_progress::ReindexProgress;
-use crate::segment_manager::SegmentManager;
+use crate::segment_manager::{DEFAULT_COMPACTION_BUDGET, SegmentManager};
 
 /// Run catch-up: detect changes since last checkpoint and apply them.
 ///
@@ -74,7 +74,7 @@ pub fn run_catchup_with_progress<F: Fn(ReindexProgress) + Send + Sync>(
             on_progress(ReindexProgress::CompactingSegments {
                 input_segments: snap.len(),
             });
-            drop(manager.compact_background());
+            manager.compact_with_progress(DEFAULT_COMPACTION_BUDGET, &on_progress)?;
             on_progress(ReindexProgress::Complete { changes_applied: 0 });
         }
     } else {
@@ -104,7 +104,7 @@ pub fn run_catchup_with_progress<F: Fn(ReindexProgress) + Send + Sync>(
             on_progress(ReindexProgress::CompactingSegments {
                 input_segments: snap.len(),
             });
-            drop(manager.compact_background());
+            manager.compact_with_progress(DEFAULT_COMPACTION_BUDGET, &on_progress)?;
         }
 
         on_progress(ReindexProgress::Complete {
@@ -349,8 +349,8 @@ mod tests {
         assert!(cp2.is_some());
     }
 
-    #[tokio::test]
-    async fn test_catchup_force_compact_emits_compacting_event() {
+    #[test]
+    fn test_catchup_force_compact_emits_compacting_event() {
         use crate::reindex_progress::ReindexProgress;
 
         let dir = tempfile::tempdir().unwrap();
