@@ -1,39 +1,25 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>indexrs</title>
-    <link rel="stylesheet" href="/static/style.css">
-    <script>
-        (function(){var t=localStorage.getItem("theme")||(matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light");document.documentElement.setAttribute("data-theme",t)})();
-    </script>
-</head>
-<body>
-    <header class="header">
-        <h1>indexrs</h1>
-        {% if !repos.is_empty() %}
-        <select name="repo-select" id="repo-select" class="repo-select"
-                hx-get="/search-results" hx-trigger="change"
-                hx-target="#results" hx-include=".search-input, #search-mode">
-            {% for repo in &repos %}
-            <option value="{{ repo.name }}"{% if repo.name == selected_repo %} selected{% endif %}>{{ repo.name }}</option>
-            {% endfor %}
-        </select>
-        {% endif %}
-        <div class="header-spacer"></div>
-        <button class="theme-slider" id="theme-toggle" type="button" title="Toggle theme" aria-label="Toggle theme">
-            <span class="theme-slider-knob">
-                <span class="theme-icon-sun" aria-hidden="true">&#9788;</span>
-                <span class="theme-icon-moon" aria-hidden="true">&#9790;</span>
-            </span>
-        </button>
-        <span class="badge badge--ok" id="repo-status"
-              hx-get="/repo-status" hx-trigger="change from:#repo-select"
-              hx-include="#repo-select">{{ status }}</span>
-        <a href="/repos" class="badge badge--link">{{ repo_count }} repo{% if repo_count != 1 %}s{% endif %} &#8250;</a>
-    </header>
+{% extends "base.html" %}
 
+{% block header_nav %}
+    {% if !repos.is_empty() %}
+    <select name="repo-select" id="repo-select" class="repo-select"
+            hx-get="/search-results" hx-trigger="change"
+            hx-target="#results" hx-include=".search-input, #search-mode">
+        {% for repo in &repos %}
+        <option value="{{ repo.name }}"{% if repo.name == selected_repo %} selected{% endif %}>{{ repo.name }}</option>
+        {% endfor %}
+    </select>
+    {% endif %}
+{% endblock %}
+
+{% block header_right %}
+    <span class="badge badge--ok" id="repo-status"
+          hx-get="/repo-status" hx-trigger="change from:#repo-select"
+          hx-include="#repo-select">{{ status }}</span>
+    <a href="/repos" class="badge badge--link">{{ repo_count }} repo{% if repo_count != 1 %}s{% endif %} &#8250;</a>
+{% endblock %}
+
+{% block content %}
     <div class="search-bar">
         <div class="search-mode-toggle">
             <button type="button" class="mode-btn mode-btn--active" id="mode-text" data-mode="text">Code</button>
@@ -88,8 +74,4 @@
             <div id="quickopen-results" class="quickopen-results"></div>
         </div>
     </div>
-
-    <script src="/static/htmx.min.js"></script>
-    <script src="/static/app.js"></script>
-</body>
-</html>
+{% endblock %}
