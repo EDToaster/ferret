@@ -41,15 +41,18 @@
                hx-get="/search-results"
                hx-trigger="keyup changed delay:150ms, search"
                hx-target="#results"
-               hx-include="#repo-select">
-        <span class="htmx-indicator"><span class="spinner"></span></span>
+               hx-include="#repo-select"
+               hx-indicator="#search-spinner">
     </div>
 
-    <div id="results" class="results">
+    <div class="results-wrap">
+        <span class="htmx-indicator" id="search-spinner"><span class="spinner"></span></span>
+        <div id="results" class="results">
         <div class="empty-state">
             <p>Type to search across your codebase</p>
             <p class="hint">Supports literal strings, "exact phrases", regex /patterns/, AND/OR/NOT, lang:rust, path:src/</p>
         </div>
+    </div>
     </div>
 
     <div class="help-overlay" id="help-overlay">

@@ -117,6 +117,7 @@ a:hover {
 
 /* Search bar */
 .search-bar {
+    position: relative;
     padding: 0.75rem 1.25rem;
     background: var(--bg);
     border-bottom: 1px solid var(--border);
@@ -290,17 +291,20 @@ mark {
     border-top: 1px solid var(--border);
 }
 
-.pagination a, .pagination span {
+.pagination button, .pagination span {
     padding: 0.3rem 0.7rem;
     border: 1px solid var(--border);
     border-radius: var(--radius);
     font-size: 0.8rem;
+    font-family: inherit;
+    background: var(--bg);
+    color: var(--fg);
+    cursor: pointer;
     transition: all var(--transition);
 }
 
-.pagination a:hover {
+.pagination button:hover {
     background: var(--bg-secondary);
-    text-decoration: none;
     border-color: var(--accent);
     color: var(--accent);
 }
@@ -474,14 +478,35 @@ mark {
     align-items: center;
 }
 
-/* htmx indicator */
+/* htmx indicator — positioned inside search bar, no layout shift */
 .htmx-indicator {
     display: none;
+    opacity: 1 !important;
 }
 
 .htmx-request .htmx-indicator,
 .htmx-request.htmx-indicator {
     display: inline-block;
+    opacity: 1 !important;
+}
+
+.results-wrap {
+    position: relative;
+}
+
+#search-spinner {
+    position: absolute;
+    top: 0;
+    right: 1.25rem;
+    height: calc(0.35rem * 2 + 0.8rem * 1.4);
+    display: none;
+    align-items: center;
+    z-index: 1;
+    pointer-events: none;
+}
+
+#search-spinner.htmx-request {
+    display: flex;
 }
 
 /* Loading spinner */
