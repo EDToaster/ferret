@@ -583,7 +583,6 @@ mark {
     border-radius: var(--radius-lg);
     background: var(--bg-elevated);
     margin-bottom: 0.6rem;
-    overflow: hidden;
     transition: border-color var(--transition), box-shadow var(--transition);
     border-left: 3px solid var(--success);
 }
