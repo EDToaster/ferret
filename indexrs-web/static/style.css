@@ -115,6 +115,75 @@ a:hover {
     flex: 1;
 }
 
+/* Layout: sidebar + main */
+.layout {
+    display: flex;
+    min-height: calc(100vh - 42px);
+}
+
+.main {
+    flex: 1;
+    min-width: 0;
+}
+
+/* Sidebar */
+.sidebar {
+    width: 220px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    background: var(--bg-secondary);
+    overflow-y: auto;
+    max-height: calc(100vh - 42px);
+    position: sticky;
+    top: 42px;
+}
+
+.sidebar-repo {
+    padding: 0.55rem 0.75rem;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-subtle);
+    transition: background var(--transition);
+}
+
+.sidebar-repo:hover {
+    background: var(--bg-elevated);
+}
+
+.sidebar-repo--active {
+    background: var(--bg-elevated);
+    border-left: 3px solid var(--accent);
+    padding-left: calc(0.75rem - 3px);
+}
+
+.sidebar-repo-radio {
+    display: none;
+}
+
+.sidebar-repo-name {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--fg);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sidebar-repo-path {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--fg-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 0.15rem;
+}
+
+.sidebar-repo-status {
+    margin-top: 0.3rem;
+    font-size: 0.65rem;
+}
+
 /* Search bar */
 .search-bar {
     position: relative;
@@ -321,23 +390,6 @@ mark {
     color: var(--fg-muted);
     cursor: default;
     opacity: 0.4;
-}
-
-/* Repo selector */
-.repo-select {
-    padding: 0.25rem 0.45rem;
-    font-size: 0.8rem;
-    font-weight: 500;
-    background: var(--bg);
-    color: var(--fg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    cursor: pointer;
-    transition: border-color var(--transition);
-}
-
-.repo-select:hover {
-    border-color: var(--accent);
 }
 
 /* Badge */

@@ -11,9 +11,11 @@ use crate::AppState;
 // Template types
 // ---------------------------------------------------------------------------
 
-/// A repo entry for the template dropdown.
+/// A repo entry for the sidebar.
 pub struct RepoItem {
     pub name: String,
+    pub path: String,
+    pub status: String,
 }
 
 #[derive(Template)]
@@ -21,7 +23,6 @@ pub struct RepoItem {
 struct IndexTemplate {
     repos: Vec<RepoItem>,
     selected_repo: String,
-    status: String,
     repo_count: usize,
 }
 
@@ -384,25 +385,24 @@ pub async fn index(State(state): State<AppState>) -> Response {
 
     let selected_repo = repo_names.first().cloned().unwrap_or_default();
 
-    // Get status of selected repo
-    let status = if let Some(path) = repos_map.get(&selected_repo) {
-        proxy_status(state.daemon_bin(), path)
+    // Build repo items with status for each repo
+    let mut repos = Vec::with_capacity(repo_names.len());
+    for name in &repo_names {
+        let path = &repos_map[name];
+        let status = proxy_status(state.daemon_bin(), path)
             .await
-            .unwrap_or_else(|_| "offline".to_string())
-    } else {
-        "no repos".to_string()
-    };
-
-    let repos: Vec<RepoItem> = repo_names
-        .into_iter()
-        .map(|name| RepoItem { name })
-        .collect();
+            .unwrap_or_else(|_| "offline".to_string());
+        repos.push(RepoItem {
+            name: name.clone(),
+            path: path.display().to_string(),
+            status,
+        });
+    }
     let repo_count = repos.len();
 
     render_template(IndexTemplate {
         repos,
         selected_repo,
-        status,
         repo_count,
     })
 }

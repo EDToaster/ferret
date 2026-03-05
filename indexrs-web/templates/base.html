@@ -12,7 +12,6 @@
 <body>
     <header class="header">
         <h1>indexrs</h1>
-        {% block header_nav %}{% endblock %}
         <div class="header-spacer"></div>
         <button class="theme-slider" id="theme-toggle" type="button" title="Toggle theme" aria-label="Toggle theme">
             <span class="theme-slider-knob">
@@ -23,7 +22,12 @@
         {% block header_right %}{% endblock %}
     </header>
 
-    {% block content %}{% endblock %}
+    <div class="layout">
+        {% block sidebar %}{% endblock %}
+        <div class="main">
+            {% block content %}{% endblock %}
+        </div>
+    </div>
 
     <script src="/static/htmx.min.js"></script>
     <script src="/static/app.js"></script>

@@ -1,22 +1,27 @@
 {% extends "base.html" %}
 
-{% block header_nav %}
-    {% if !repos.is_empty() %}
-    <select name="repo-select" id="repo-select" class="repo-select"
-            hx-get="/search-results" hx-trigger="change"
-            hx-target="#results" hx-include=".search-input, #search-mode">
-        {% for repo in &repos %}
-        <option value="{{ repo.name }}"{% if repo.name == selected_repo %} selected{% endif %}>{{ repo.name }}</option>
-        {% endfor %}
-    </select>
-    {% endif %}
+{% block header_right %}
+    <a href="/repos" class="badge badge--link">{{ repo_count }} repo{% if repo_count != 1 %}s{% endif %} &#8250;</a>
 {% endblock %}
 
-{% block header_right %}
-    <span class="badge badge--ok" id="repo-status"
-          hx-get="/repo-status" hx-trigger="change from:#repo-select"
-          hx-include="#repo-select">{{ status }}</span>
-    <a href="/repos" class="badge badge--link">{{ repo_count }} repo{% if repo_count != 1 %}s{% endif %} &#8250;</a>
+{% block sidebar %}
+    <aside class="sidebar">
+        {% for repo in &repos %}
+        <div class="sidebar-repo{% if repo.name == selected_repo %} sidebar-repo--active{% endif %}"
+             data-repo="{{ repo.name }}"
+             hx-get="/search-results" hx-trigger="click"
+             hx-target="#results" hx-include=".search-input, #search-mode"
+             hx-vals='{"repo-select":"{{ repo.name }}"}'>
+            <input type="radio" name="repo-select" value="{{ repo.name }}"
+                   {% if repo.name == selected_repo %}checked{% endif %}
+                   class="sidebar-repo-radio">
+            <div class="sidebar-repo-name">{{ repo.name }}</div>
+            <div class="sidebar-repo-path">{{ repo.path }}</div>
+            <span class="badge badge--ok sidebar-repo-status"
+                  id="repo-status-{{ repo.name }}">{{ repo.status }}</span>
+        </div>
+        {% endfor %}
+    </aside>
 {% endblock %}
 
 {% block content %}
@@ -32,7 +37,7 @@
                hx-get="/search-results"
                hx-trigger="keyup changed delay:150ms, search"
                hx-target="#results"
-               hx-include="#repo-select, #search-mode"
+               hx-include=".sidebar-repo-radio:checked, #search-mode"
                hx-indicator="#search-spinner">
     </div>
 
@@ -70,7 +75,7 @@
                    hx-get="/symbol-results"
                    hx-trigger="keyup changed delay:100ms"
                    hx-target="#quickopen-results"
-                   hx-include="#repo-select">
+                   hx-include=".sidebar-repo-radio:checked">
             <div id="quickopen-results" class="quickopen-results"></div>
         </div>
     </div>

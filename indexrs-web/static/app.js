@@ -302,6 +302,20 @@
         }
     });
 
+    // Sidebar repo selection
+    document.addEventListener("click", function(e) {
+        var repo = e.target.closest(".sidebar-repo");
+        if (!repo) return;
+        // Update active state
+        document.querySelectorAll(".sidebar-repo").forEach(function(el) {
+            el.classList.remove("sidebar-repo--active");
+        });
+        repo.classList.add("sidebar-repo--active");
+        // Check the radio so htmx includes it
+        var radio = repo.querySelector(".sidebar-repo-radio");
+        if (radio) radio.checked = true;
+    });
+
     // Outline panel toggle
     var outlineToggle = document.getElementById("outline-toggle");
     if (outlineToggle) {
