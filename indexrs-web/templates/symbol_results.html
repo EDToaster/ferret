@@ -13,9 +13,38 @@
 {% endfor %}
 {% else %}
     {% if !query.is_empty() %}
-    <div class="empty-state">
-        <p>No symbols matching "{{ query }}"</p>
+    <div class="empty-state empty-state--no-symbols">
+        <pre class="ferret-art" aria-hidden="true"></pre>
+        <p class="ferret-msg"></p>
         <p class="hint">Try a different query or symbol kind filter</p>
+        <script>
+        (function() {
+            var ferrets = [
+                ["   ／l、\n （ﾟ､ ｡ ７\n   l  ~ヽ\n   じしf_,)ノ", [
+                    "That symbol is undefined... just like my feelings.",
+                    "Not in any scope I can reach.",
+                    "I sniffed every namespace. Nothing.",
+                ]],
+                ["     ∧,,,∧\n    ( ̳• · • ̳)\n    /    づ♡", [
+                    "No definitions found. Maybe it's a runtime thing?",
+                    "Undeclared, unresolved, unferretable.",
+                    "No symbols here, but you still have me.",
+                ]],
+                ["  ⸜( ˃ ᵕ ˂ )⸝\n    /|    |\\", [
+                    "I checked every scope. Not declared anywhere.",
+                    "Symbol not found. Have you tried impl?",
+                    "Maybe it only exists in the type-checker's dreams.",
+                ]],
+            ];
+            var pick = ferrets[Math.floor(Math.random() * ferrets.length)];
+            var msgs = pick[1];
+            var el = document.querySelector('.empty-state--no-symbols');
+            if (el) {
+                el.querySelector('.ferret-art').textContent = pick[0];
+                el.querySelector('.ferret-msg').textContent = msgs[Math.floor(Math.random() * msgs.length)];
+            }
+        })();
+        </script>
     </div>
     {% else %}
     <div class="empty-state">
