@@ -296,6 +296,7 @@ a:hover {
 .code-line {
     display: flex;
     min-height: 1.45em;
+    min-width: max-content;
 }
 
 .code-line--match {
@@ -328,7 +329,6 @@ a:hover {
     flex: 1;
     padding: 0 0.7rem;
     white-space: pre;
-    overflow-x: auto;
 }
 
 /* Match highlight */
