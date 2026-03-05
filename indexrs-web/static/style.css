@@ -1191,7 +1191,23 @@ mark {
 
 /* Segments detail table */
 .segments-table-wrap {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 200ms ease, opacity 200ms ease;
+    opacity: 0;
     border-top: 1px solid var(--border-subtle);
+}
+
+.segments-table-inner {
+    overflow: hidden;
+}
+
+.segments-table-wrap.is-open {
+    grid-template-rows: 1fr;
+    opacity: 1;
+}
+
+.segments-table-wrap.is-open .segments-table-inner {
     overflow-x: auto;
 }
 

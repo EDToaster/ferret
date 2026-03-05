@@ -91,7 +91,8 @@
             </div>
             {% endif %}
             {% if !repo.segment_details.is_empty() %}
-            <div class="segments-table-wrap" id="segments-{{ repo.name }}" style="display: none">
+            <div class="segments-table-wrap" id="segments-{{ repo.name }}">
+              <div class="segments-table-inner">
                 <table class="segments-table">
                     <thead>
                         <tr>
@@ -122,6 +123,7 @@
                     {% endfor %}
                     </tbody>
                 </table>
+              </div>
             </div>
             {% endif %}
             {% if !repo.languages.is_empty() %}

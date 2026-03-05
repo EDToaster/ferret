@@ -241,7 +241,7 @@
         var target = document.getElementById(id);
         var toggle = document.querySelector('[data-toggle="' + id + '"]');
         if (target) {
-            target.style.display = "";
+            target.classList.add("is-open");
             if (toggle) toggle.classList.add("is-expanded");
         }
     });
@@ -252,12 +252,11 @@
         var id = toggle.getAttribute("data-toggle");
         var target = document.getElementById(id);
         if (target) {
-            var isHidden = target.style.display === "none";
-            target.style.display = isHidden ? "" : "none";
-            toggle.classList.toggle("is-expanded", isHidden);
+            var isOpen = target.classList.toggle("is-open");
+            toggle.classList.toggle("is-expanded", isOpen);
 
             var expanded = getExpandedSections();
-            if (isHidden) {
+            if (isOpen) {
                 if (expanded.indexOf(id) === -1) expanded.push(id);
             } else {
                 expanded = expanded.filter(function(x) { return x !== id; });
