@@ -1069,8 +1069,8 @@ impl SegmentManager {
                 let batch_file_count = files.len();
                 let writer = SegmentWriter::new(segments_dir, seg_id);
                 let segment = writer.build_from_compact(files).map(Arc::new)?;
-                let done = written_files.fetch_add(batch_file_count, Ordering::Relaxed)
-                    + batch_file_count;
+                let done =
+                    written_files.fetch_add(batch_file_count, Ordering::Relaxed) + batch_file_count;
                 on_progress(ReindexProgress::CompactingWriting {
                     segment_id: seg_id.0,
                     files_done: done,
