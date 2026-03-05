@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use ferret_indexer_core::highlight::Token;
 use ferret_indexer_core::search::FileMatch;
 #[cfg(feature = "symbols")]
 use ferret_indexer_core::symbol_index::SymbolMatch;
@@ -33,6 +34,9 @@ pub struct FileResponse {
     pub language: String,
     pub total_lines: usize,
     pub lines: Vec<String>,
+    /// Per-line syntax highlight tokens (same length as `lines`; empty inner vecs if unavailable).
+    #[serde(default)]
+    pub highlight_tokens: Vec<Vec<Token>>,
 }
 
 /// Per-segment size breakdown.
@@ -181,6 +185,7 @@ mod tests {
                     ranges: vec![(0, 7)],
                     context_before: vec![],
                     context_after: vec![],
+                    highlight_tokens: vec![],
                 }],
                 score: 0.95,
             },
@@ -236,6 +241,7 @@ mod tests {
                 "".to_string(),
                 "fn main() {}".to_string(),
             ],
+            highlight_tokens: vec![vec![], vec![], vec![]],
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("src/lib.rs"));

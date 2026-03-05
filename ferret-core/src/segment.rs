@@ -86,6 +86,9 @@ pub struct Segment {
     meta_mmap: Mmap,
     paths_mmap: Mmap,
     entry_count: u32,
+    /// Size of each metadata entry (58 for v1, 74 for v2).
+    meta_entry_size: usize,
+    highlight_reader: Option<crate::highlight::HighlightStoreReader>,
     cached_tombstones: RwLock<Option<TombstoneSet>>,
     #[cfg(feature = "symbols")]
     symbol_reader: Option<crate::symbol_index::SymbolIndexReader>,
@@ -135,9 +138,22 @@ impl Segment {
         // SAFETY: Same invariant as above.
         let paths_mmap = unsafe { Mmap::map(&paths_file)? };
 
-        // Validate the metadata header and extract entry count
+        // Validate the metadata header and extract entry count + entry size
         let reader = MetadataReader::new(&meta_mmap, &paths_mmap)?;
         let entry_count = reader.entry_count();
+        let meta_entry_size = reader.entry_size();
+
+        let highlight_reader = {
+            let highlights_path = dir_path.join("highlights.zst");
+            if highlights_path.exists() {
+                Some(
+                    crate::highlight::HighlightStoreReader::open(&highlights_path)
+                        .map_err(IndexError::Io)?,
+                )
+            } else {
+                None
+            }
+        };
 
         #[cfg(feature = "symbols")]
         let symbol_reader = {
@@ -157,6 +173,8 @@ impl Segment {
             meta_mmap,
             paths_mmap,
             entry_count,
+            meta_entry_size,
+            highlight_reader,
             cached_tombstones: RwLock::new(None),
             #[cfg(feature = "symbols")]
             symbol_reader,
@@ -197,13 +215,26 @@ impl Segment {
         self.symbol_reader.as_ref()
     }
 
+    /// Access the highlight store reader for this segment, if available.
+    ///
+    /// Returns `None` if the segment was built without highlight data
+    /// (e.g., old segments or segments with no supported languages).
+    pub fn highlight_reader(&self) -> Option<&crate::highlight::HighlightStoreReader> {
+        self.highlight_reader.as_ref()
+    }
+
     /// Create a `MetadataReader` for this segment's metadata.
     ///
     /// Useful for iterating all entries (e.g. during compaction).
     /// This skips header re-validation since the header was already
     /// validated during [`Segment::open()`].
     pub fn metadata_reader(&self) -> MetadataReader<'_> {
-        MetadataReader::new_unchecked(&self.meta_mmap, &self.paths_mmap, self.entry_count)
+        MetadataReader::new_unchecked(
+            &self.meta_mmap,
+            &self.paths_mmap,
+            self.entry_count,
+            self.meta_entry_size,
+        )
     }
 
     /// Look up file metadata by file ID.
@@ -211,8 +242,12 @@ impl Segment {
     /// Creates an ephemeral `MetadataReader` from the stored memory maps.
     /// Returns `Ok(None)` if the file ID does not exist in this segment.
     pub fn get_metadata(&self, file_id: FileId) -> Result<Option<FileMetadata>, IndexError> {
-        let reader =
-            MetadataReader::new_unchecked(&self.meta_mmap, &self.paths_mmap, self.entry_count);
+        let reader = MetadataReader::new_unchecked(
+            &self.meta_mmap,
+            &self.paths_mmap,
+            self.entry_count,
+            self.meta_entry_size,
+        );
         reader.get(file_id)
     }
 
@@ -222,8 +257,12 @@ impl Segment {
     /// avoids deserializing the full entry. Used for candidate ordering
     /// (sort by file size before verification).
     pub fn get_size_bytes(&self, file_id: FileId) -> Result<Option<u32>, IndexError> {
-        let reader =
-            MetadataReader::new_unchecked(&self.meta_mmap, &self.paths_mmap, self.entry_count);
+        let reader = MetadataReader::new_unchecked(
+            &self.meta_mmap,
+            &self.paths_mmap,
+            self.entry_count,
+            self.meta_entry_size,
+        );
         reader.get_size_bytes(file_id)
     }
 
@@ -392,6 +431,8 @@ impl SegmentWriter {
             language: Language,
             line_count: u32,
             compressed: Vec<u8>,
+            /// Pre-compressed highlight data and line count, or None if language unsupported.
+            highlight_compressed: Option<(Vec<u8>, u32)>,
             #[cfg(feature = "symbols")]
             symbols: Vec<crate::symbol_extractor::SymbolEntry>,
         }
@@ -400,6 +441,9 @@ impl SegmentWriter {
         let mut metadata_builder = MetadataBuilder::new();
         let mut content_writer =
             ContentStoreWriter::new(&temp_dir.join("content.zst")).map_err(IndexError::Io)?;
+        let mut highlight_writer =
+            crate::highlight::HighlightStoreWriter::new(&temp_dir.join("highlights.zst"))
+                .map_err(IndexError::Io)?;
 
         // Phase 1: Parallel per-file processing (blake3 hash + zstd compress)
         let processed: Vec<ProcessedFile> = files
@@ -415,6 +459,17 @@ impl SegmentWriter {
                 let compressed = zstd::bulk::compress(&input.content, ZSTD_LEVEL)
                     .expect("zstd compression should not fail on valid input");
 
+                // Tokenize for syntax highlighting
+                let highlight_compressed =
+                    crate::highlight::tokenize_file(&input.content, language).map(|line_tokens| {
+                        let fh = crate::highlight::build_file_highlight(&line_tokens);
+                        let serialized = crate::highlight::serialize_file_highlight(&fh);
+                        let hl_compressed = zstd::bulk::compress(&serialized, ZSTD_LEVEL)
+                            .expect("zstd compress highlight");
+                        let lines = fh.line_offsets.len() as u32;
+                        (hl_compressed, lines)
+                    });
+
                 #[cfg(feature = "symbols")]
                 let symbols = crate::symbol_extractor::extract_symbols(
                     FileId(0), // placeholder — remapped in Phase 3
@@ -427,6 +482,7 @@ impl SegmentWriter {
                     language,
                     line_count,
                     compressed,
+                    highlight_compressed,
                     #[cfg(feature = "symbols")]
                     symbols,
                 }
@@ -447,6 +503,17 @@ impl SegmentWriter {
                 .add_raw(&proc_file.compressed)
                 .map_err(IndexError::Io)?;
 
+            // Write pre-compressed highlights (if available)
+            let (highlight_offset, highlight_len, highlight_lines) =
+                if let Some((ref hl_compressed, hl_lines)) = proc_file.highlight_compressed {
+                    let (off, len) = highlight_writer
+                        .add_raw(hl_compressed)
+                        .map_err(IndexError::Io)?;
+                    (off, len, hl_lines)
+                } else {
+                    (0, 0, 0)
+                };
+
             metadata_builder.add_file(FileMetadata {
                 file_id,
                 path: input.path.clone(),
@@ -457,6 +524,9 @@ impl SegmentWriter {
                 line_count: proc_file.line_count,
                 content_offset,
                 content_len,
+                highlight_offset,
+                highlight_len,
+                highlight_lines,
             });
 
             on_file_done();
@@ -475,8 +545,9 @@ impl SegmentWriter {
             .write_to(&mut meta_file, &mut paths_file)
             .map_err(IndexError::Io)?;
 
-        // Finish content store
+        // Finish content store and highlight store
         content_writer.finish().map_err(IndexError::Io)?;
+        highlight_writer.finish().map_err(IndexError::Io)?;
 
         // Create empty tombstones.bin
         fs::write(temp_dir.join("tombstones.bin"), b"")?;
@@ -549,6 +620,9 @@ impl SegmentWriter {
         let mut metadata_builder = MetadataBuilder::new();
         let mut content_writer =
             ContentStoreWriter::new(&temp_dir.join("content.zst")).map_err(IndexError::Io)?;
+        let mut highlight_writer =
+            crate::highlight::HighlightStoreWriter::new(&temp_dir.join("highlights.zst"))
+                .map_err(IndexError::Io)?;
 
         for (i, file) in files.iter().enumerate() {
             let file_id = FileId(u32::try_from(i).map_err(|_| {
@@ -563,6 +637,17 @@ impl SegmentWriter {
                 .add_raw(&file.compressed)
                 .map_err(IndexError::Io)?;
 
+            // Re-tokenize for highlight data (file_ids are remapped during compaction)
+            let (highlight_offset, highlight_len, highlight_lines) = if let Some(line_tokens) =
+                crate::highlight::tokenize_file(&file.raw_content, file.language)
+            {
+                let fh = crate::highlight::build_file_highlight(&line_tokens);
+                let (off, len, lines) = highlight_writer.add_file(&fh).map_err(IndexError::Io)?;
+                (off, len, lines)
+            } else {
+                (0, 0, 0)
+            };
+
             metadata_builder.add_file(FileMetadata {
                 file_id,
                 path: file.path.clone(),
@@ -573,6 +658,9 @@ impl SegmentWriter {
                 line_count: file.line_count,
                 content_offset,
                 content_len,
+                highlight_offset,
+                highlight_len,
+                highlight_lines,
             });
         }
 
@@ -587,6 +675,7 @@ impl SegmentWriter {
             .map_err(IndexError::Io)?;
 
         content_writer.finish().map_err(IndexError::Io)?;
+        highlight_writer.finish().map_err(IndexError::Io)?;
         fs::write(temp_dir.join("tombstones.bin"), b"")?;
 
         // Symbol index for compaction: re-extract from raw content

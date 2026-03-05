@@ -129,7 +129,8 @@ The indexing pipeline flows: **files → trigrams → posting lists → binary f
 - `intersection.rs` — `find_candidates(reader, query)` extracts trigrams from query, looks up each, intersects file ID lists (smallest-first merge). Queries < 3 chars return empty.
 - `metadata.rs` — `MetadataBuilder`/`MetadataReader` for file metadata (path, hash, language, content offset). Fixed 58-byte entries + string pool.
 - `content.rs` — `ContentStoreWriter`/`ContentStoreReader` for zstd-compressed file content with random access via (offset, len) pairs.
-- `search.rs` — Search result types: `LineMatch`, `FileMatch` (with relevance score), `SearchResult` (with duration). Implements `Display` for plain-text output.
+- `search.rs` — Search result types: `LineMatch`, `FileMatch` (with relevance score), `SearchResult` (with duration). Implements `Display` for plain-text output. `LineMatch` and `ContextLine` carry per-line `highlight_tokens` populated from the segment's highlight store.
+- `highlight.rs` — Syntax highlighting: `TokenKind` (16 categories), `Token` (len + kind), `FileHighlight` (line-indexed RLE token store). `tokenize_file()` uses syntect for per-line tokenization. `HighlightStoreWriter`/`HighlightStoreReader` for per-segment `highlights.zst` (zstd-compressed, mmap'd). Returns `None` for unsupported languages.
 - `types.rs` — Core types: `FileId(u32)`, `Trigram([u8; 3])`, `SegmentId(u32)`, `Language` enum (59 variants + Unknown, with `from_extension()` detection), `SymbolKind` enum.
 - `error.rs` — `IndexError` enum with `thiserror`. All fallible ops return `Result<T, IndexError>`.
 
@@ -184,14 +185,23 @@ Positional postings are optional. `SegmentWriter` uses file-only mode (`PostingL
 **meta.bin:**
 ```
 [Header 10B]  magic:u32 "META" | version:u16 | entry_count:u32
-[Entries]  58B each, indexed by file_id
+[Entries]  74B each (v2), indexed by file_id
   file_id:u32 | path_offset:u32 | path_len:u32 | content_hash:[u8;16] |
   language:u16 | size_bytes:u32 | mtime_epoch_secs:u64 | line_count:u32 |
-  content_offset:u64 | content_len:u32
+  content_offset:u64 | content_len:u32 |
+  highlight_offset:u64 | highlight_len:u32 | highlight_lines:u32
 ```
 Plus **paths.bin** — contiguous UTF-8 path strings (no separators; offsets from meta entries).
 
 **content.zst:** Zstd-compressed blocks (level 3), each independently compressed. Random access via (offset, compressed_len) stored in metadata.
+
+**highlights.zst:** Pre-computed syntax highlight tokens (optional). Per-file blocks, independently zstd-compressed. Each decompressed block:
+```
+[line_count: u32 LE]
+[line_offsets: u32 LE × line_count]  — byte offset into token_data per line
+[token_data: u8...]                   — RLE tokens: (len:u16 LE, kind:u8) triples
+```
+Token kinds (4-bit enum, stored as u8): 0=Plain, 1=Keyword, 2=String, 3=Comment, 4=Number, 5=Function, 6=Type, 7=Variable, 8=Operator, 9=Punctuation, 10=Macro, 11=Attribute, 12=Constant, 13=Module, 14=Label, 15=Other. Files with unsupported languages store (0, 0, 0) in metadata and have no entry in highlights.zst.
 
 **tombstones.bin:**
 ```
@@ -208,6 +218,7 @@ Plus **paths.bin** — contiguous UTF-8 path strings (no separators; offsets fro
       meta.bin        # File metadata entries
       trigrams.bin    # Trigram posting lists
       content.zst     # Zstd-compressed file contents
+      highlights.zst  # Pre-computed syntax highlight tokens (optional)
       paths.bin       # Path string pool
       tombstones.bin  # Bitmap of deleted file_ids
     seg_0002/

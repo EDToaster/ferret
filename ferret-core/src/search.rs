@@ -43,6 +43,9 @@ pub struct LineMatch {
     pub context_before: Vec<ContextLine>,
     /// Context lines after this match. Empty when context_lines=0.
     pub context_after: Vec<ContextLine>,
+    /// Syntax highlight tokens for this line (empty if highlights unavailable).
+    #[serde(default)]
+    pub highlight_tokens: Vec<crate::highlight::Token>,
 }
 
 /// A file that matched a search query, with its matching lines.
@@ -67,6 +70,9 @@ pub struct ContextLine {
     pub line_number: u32,
     /// The full text content of the line.
     pub content: String,
+    /// Syntax highlight tokens for this context line (empty if unavailable).
+    #[serde(default)]
+    pub highlight_tokens: Vec<crate::highlight::Token>,
 }
 
 /// A group of adjacent matches with their surrounding context lines.
@@ -244,11 +250,14 @@ mod tests {
                 context_before: vec![ContextLine {
                     line_number: 4,
                     content: "".to_string(),
+                    highlight_tokens: vec![],
                 }],
                 context_after: vec![ContextLine {
                     line_number: 6,
                     content: "    println!(\"hello\");".to_string(),
+                    highlight_tokens: vec![],
                 }],
+                highlight_tokens: vec![],
             }],
             score: 0.9,
         };
@@ -286,6 +295,7 @@ mod tests {
             ranges: vec![(3, 14), (31, 36)],
             context_before: vec![],
             context_after: vec![],
+            highlight_tokens: vec![],
         };
         assert_eq!(line.line_number, 10);
         assert_eq!(line.ranges.len(), 2);
@@ -304,6 +314,7 @@ mod tests {
             ranges: vec![],
             context_before: vec![],
             context_after: vec![],
+            highlight_tokens: vec![],
         };
         assert!(line.ranges.is_empty());
     }
@@ -320,6 +331,7 @@ mod tests {
                 ranges: vec![(11, 17)],
                 context_before: vec![],
                 context_after: vec![],
+                highlight_tokens: vec![],
             }],
             score: 0.92,
         };
@@ -352,6 +364,7 @@ mod tests {
         let cl = ContextLine {
             line_number: 5,
             content: "use std::io;".to_string(),
+            highlight_tokens: vec![],
         };
         assert_eq!(cl.line_number, 5);
         assert_eq!(cl.content, "use std::io;");
@@ -363,6 +376,7 @@ mod tests {
             before: vec![ContextLine {
                 line_number: 1,
                 content: "// before".to_string(),
+                highlight_tokens: vec![],
             }],
             matches: vec![LineMatch {
                 line_number: 2,
@@ -370,10 +384,12 @@ mod tests {
                 ranges: vec![(0, 2)],
                 context_before: vec![],
                 context_after: vec![],
+                highlight_tokens: vec![],
             }],
             after: vec![ContextLine {
                 line_number: 3,
                 content: "// after".to_string(),
+                highlight_tokens: vec![],
             }],
         };
         assert_eq!(block.before.len(), 1);
@@ -391,16 +407,20 @@ mod tests {
                 ContextLine {
                     line_number: 8,
                     content: "".to_string(),
+                    highlight_tokens: vec![],
                 },
                 ContextLine {
                     line_number: 9,
                     content: "/// Parse a query string.".to_string(),
+                    highlight_tokens: vec![],
                 },
             ],
             context_after: vec![ContextLine {
                 line_number: 11,
                 content: "    let tokens = tokenize(input);".to_string(),
+                highlight_tokens: vec![],
             }],
+            highlight_tokens: vec![],
         };
         assert_eq!(line.context_before.len(), 2);
         assert_eq!(line.context_after.len(), 1);
@@ -416,6 +436,7 @@ mod tests {
             ranges: vec![],
             context_before: vec![],
             context_after: vec![],
+            highlight_tokens: vec![],
         };
         assert!(line.context_before.is_empty());
         assert!(line.context_after.is_empty());

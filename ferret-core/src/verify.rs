@@ -203,6 +203,7 @@ impl ContentVerifier {
                 ranges,
                 context_before: vec![],
                 context_after: vec![],
+                highlight_tokens: vec![],
             })
             .collect()
     }
@@ -242,6 +243,7 @@ impl ContentVerifier {
                 ranges,
                 context_before: vec![],
                 context_after: vec![],
+                highlight_tokens: vec![],
             })
             .collect()
     }
@@ -306,6 +308,7 @@ impl ContentVerifier {
                     .map(|ln| ContextLine {
                         line_number: ln,
                         content: line_index.line_content(content, ln).to_string(),
+                        highlight_tokens: vec![],
                     })
                     .collect();
 
@@ -315,6 +318,7 @@ impl ContentVerifier {
                     .map(|ln| ContextLine {
                         line_number: ln,
                         content: line_index.line_content(content, ln).to_string(),
+                        highlight_tokens: vec![],
                     })
                     .collect();
 

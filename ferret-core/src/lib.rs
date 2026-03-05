@@ -10,6 +10,7 @@ pub mod git_diff;
 #[cfg(feature = "symbols")]
 pub mod grammar;
 pub mod hash_diff;
+pub mod highlight;
 pub mod hybrid_detector;
 pub mod index_reader;
 pub mod index_state;
@@ -56,6 +57,10 @@ pub use disk::dir_size;
 pub use error::{IndexError, Result};
 pub use git_diff::GitChangeDetector;
 pub use hash_diff::hash_diff;
+pub use highlight::{
+    FileHighlight, HighlightStoreReader, HighlightStoreWriter, Token, TokenKind,
+    build_file_highlight, decode_rle, encode_rle, tokenize_file,
+};
 pub use hybrid_detector::HybridDetector;
 pub use index_reader::TrigramIndexReader;
 pub use index_state::{IndexState, SegmentList};

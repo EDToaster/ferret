@@ -31,6 +31,32 @@ use crate::verify::ContentVerifier;
 /// outweighs the benefit of parallelism.
 const PAR_THRESHOLD: usize = 64;
 
+/// Populate highlight tokens on line matches from the segment's highlight store.
+///
+/// If the segment has a `HighlightStoreReader` and the file's metadata indicates
+/// stored highlights (`highlight_len > 0`), loads the `FileHighlight` and fills
+/// in `highlight_tokens` on each `LineMatch` and its context lines.
+fn populate_highlights(segment: &Segment, meta: &FileMetadata, line_matches: &mut [LineMatch]) {
+    if meta.highlight_len > 0
+        && let Some(hr) = segment.highlight_reader()
+        && let Ok(fh) = hr.read_file(
+            meta.highlight_offset,
+            meta.highlight_len,
+            meta.highlight_lines,
+        )
+    {
+        for lm in line_matches.iter_mut() {
+            lm.highlight_tokens = fh.tokens_for_line((lm.line_number - 1) as usize);
+            for ctx in &mut lm.context_before {
+                ctx.highlight_tokens = fh.tokens_for_line((ctx.line_number - 1) as usize);
+            }
+            for ctx in &mut lm.context_after {
+                ctx.highlight_tokens = fh.tokens_for_line((ctx.line_number - 1) as usize);
+            }
+        }
+    }
+}
+
 /// Verify that a query string actually appears in file content, and return
 /// the matching lines with highlight ranges and optional context lines.
 ///
@@ -100,6 +126,7 @@ fn verify_content_matches(content: &[u8], query: &str, context_lines: usize) -> 
                     .map(|i| ContextLine {
                         line_number: (i + 1) as u32,
                         content: all_lines[i].to_string(),
+                        highlight_tokens: vec![],
                     })
                     .collect()
             } else {
@@ -121,6 +148,7 @@ fn verify_content_matches(content: &[u8], query: &str, context_lines: usize) -> 
                     .map(|i| ContextLine {
                         line_number: (i + 1) as u32,
                         content: all_lines[i].to_string(),
+                        highlight_tokens: vec![],
                     })
                     .collect()
             } else {
@@ -133,6 +161,7 @@ fn verify_content_matches(content: &[u8], query: &str, context_lines: usize) -> 
                 ranges: ranges.clone(),
                 context_before,
                 context_after,
+                highlight_tokens: vec![],
             }
         })
         .collect()
@@ -362,10 +391,12 @@ fn search_single_segment_with_context(
                 )
                 .ok()?;
 
-            let line_matches = verify_content_matches(&content, query, context_lines);
+            let mut line_matches = verify_content_matches(&content, query, context_lines);
             if line_matches.is_empty() {
                 return None;
             }
+
+            populate_highlights(segment, &meta, &mut line_matches);
 
             // Decrement budget atomically; if already 0, discard this result
             if budget
@@ -435,10 +466,12 @@ fn search_single_segment_with_context_seq(
             meta.size_bytes as usize,
         )?;
 
-        let line_matches = verify_content_matches(&content, query, context_lines);
+        let mut line_matches = verify_content_matches(&content, query, context_lines);
         if line_matches.is_empty() {
             continue;
         }
+
+        populate_highlights(segment, &meta, &mut line_matches);
 
         let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
         let input = ScoringInput {
@@ -532,7 +565,7 @@ fn verify_candidate_with_pattern(
         )
         .ok()?;
 
-    let line_matches = if context_lines > 0 {
+    let mut line_matches = if context_lines > 0 {
         let blocks = verifier.verify_with_context(&content);
         if blocks.is_empty() {
             return None;
@@ -566,6 +599,8 @@ fn verify_candidate_with_pattern(
         }
         matches
     };
+
+    populate_highlights(segment, &meta, &mut line_matches);
 
     let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
     let match_type = match pattern {
@@ -1294,7 +1329,9 @@ fn search_single_segment_with_query(
             )
             .ok()?;
 
-        let line_matches = matcher.matches(&content)?;
+        let mut line_matches = matcher.matches(&content)?;
+
+        populate_highlights(segment, &meta, &mut line_matches);
 
         // Decrement budget atomically; if already 0, discard this result
         if budget

@@ -229,9 +229,9 @@ fn validate_meta_header(path: &Path) -> Result<(), String> {
     }
 
     let version = u16::from_le_bytes(header[4..6].try_into().unwrap());
-    if version != crate::metadata::META_VERSION {
+    if version != 1 && version != crate::metadata::META_VERSION {
         return Err(format!(
-            "meta.bin unsupported version: expected {}, got {version}",
+            "meta.bin unsupported version: expected 1 or {}, got {version}",
             crate::metadata::META_VERSION
         ));
     }

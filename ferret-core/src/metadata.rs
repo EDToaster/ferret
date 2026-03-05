@@ -12,10 +12,10 @@
 //! ```text
 //! [Header]  (10 bytes)
 //!   magic: u32 = 0x4D455441  ("META")
-//!   version: u16 = 1
+//!   version: u16 = 2
 //!   entry_count: u32
 //!
-//! [Entries]  (58 bytes each, indexed by file_id)
+//! [Entries]  (74 bytes each in v2, indexed by file_id)
 //!   file_id: u32
 //!   path_offset: u32     (into paths.bin)
 //!   path_len: u32
@@ -26,6 +26,9 @@
 //!   line_count: u32
 //!   content_offset: u64
 //!   content_len: u32
+//!   highlight_offset: u64  (v2+)
+//!   highlight_len: u32     (v2+)
+//!   highlight_lines: u32   (v2+)
 //! ```
 //!
 //! **paths.bin** is a contiguous buffer of UTF-8 path strings with no separators;
@@ -43,13 +46,16 @@ use crate::types::{FileId, Language};
 pub(crate) const META_MAGIC: u32 = 0x4D45_5441;
 
 /// Current format version.
-pub(crate) const META_VERSION: u16 = 1;
+pub(crate) const META_VERSION: u16 = 2;
 
 /// Size of the meta.bin header in bytes: magic(4) + version(2) + entry_count(4).
 const HEADER_SIZE: usize = 10;
 
-/// Size of a single entry in meta.bin in bytes.
-const ENTRY_SIZE: usize = 58;
+/// Size of a single entry in meta.bin v2 in bytes.
+const ENTRY_SIZE: usize = 74;
+
+/// Size of a single entry in meta.bin v1 (no highlight fields).
+const ENTRY_SIZE_V1: usize = 58;
 
 /// Entry for one indexed file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +78,12 @@ pub struct FileMetadata {
     pub content_offset: u64,
     /// Compressed length in the content store.
     pub content_len: u32,
+    /// Byte offset into the highlight store (`highlights.zst`).
+    pub highlight_offset: u64,
+    /// Compressed length in the highlight store.
+    pub highlight_len: u32,
+    /// Number of lines with highlight data.
+    pub highlight_lines: u32,
 }
 
 /// Builder for creating the metadata index in memory.
@@ -180,6 +192,9 @@ impl MetadataBuilder {
             meta_writer.write_all(&entry.line_count.to_le_bytes())?;
             meta_writer.write_all(&entry.content_offset.to_le_bytes())?;
             meta_writer.write_all(&entry.content_len.to_le_bytes())?;
+            meta_writer.write_all(&entry.highlight_offset.to_le_bytes())?;
+            meta_writer.write_all(&entry.highlight_len.to_le_bytes())?;
+            meta_writer.write_all(&entry.highlight_lines.to_le_bytes())?;
 
             // Write path to paths pool
             paths_writer.write_all(path_bytes)?;
@@ -201,12 +216,15 @@ impl Default for MetadataBuilder {
 ///
 /// Operates over byte slices (typically from `mmap`) and performs zero-copy
 /// reads of the fixed-size entry table, resolving path strings from a
-/// separate paths buffer.
+/// separate paths buffer. Supports both v1 (58-byte entries) and v2 (74-byte
+/// entries with highlight fields).
 #[derive(Debug)]
 pub struct MetadataReader<'a> {
     data: &'a [u8],
     paths: &'a [u8],
     entry_count: u32,
+    /// Entry size in bytes (58 for v1, 74 for v2).
+    entry_size: usize,
 }
 
 impl<'a> MetadataReader<'a> {
@@ -229,15 +247,19 @@ impl<'a> MetadataReader<'a> {
         }
 
         let version = u16::from_le_bytes(meta_data[4..6].try_into().unwrap());
-        if version != META_VERSION {
-            return Err(IndexError::UnsupportedVersion {
-                version: version as u32,
-            });
-        }
+        let entry_size = match version {
+            1 => ENTRY_SIZE_V1,
+            2 => ENTRY_SIZE,
+            _ => {
+                return Err(IndexError::UnsupportedVersion {
+                    version: version as u32,
+                });
+            }
+        };
 
         let entry_count = u32::from_le_bytes(meta_data[6..10].try_into().unwrap());
 
-        let expected_size = HEADER_SIZE + (entry_count as usize) * ENTRY_SIZE;
+        let expected_size = HEADER_SIZE + (entry_count as usize) * entry_size;
         if meta_data.len() < expected_size {
             return Err(IndexError::IndexCorruption(format!(
                 "meta.bin too small: expected at least {expected_size} bytes for {entry_count} entries, got {}",
@@ -249,6 +271,7 @@ impl<'a> MetadataReader<'a> {
             data: meta_data,
             paths: paths_data,
             entry_count,
+            entry_size,
         })
     }
 
@@ -263,17 +286,24 @@ impl<'a> MetadataReader<'a> {
         meta_data: &'a [u8],
         paths_data: &'a [u8],
         entry_count: u32,
+        entry_size: usize,
     ) -> Self {
         MetadataReader {
             data: meta_data,
             paths: paths_data,
             entry_count,
+            entry_size,
         }
     }
 
     /// Return the number of entries in the metadata index.
     pub fn entry_count(&self) -> u32 {
         self.entry_count
+    }
+
+    /// Return the per-entry byte size (58 for v1, 74 for v2).
+    pub fn entry_size(&self) -> usize {
+        self.entry_size
     }
 
     /// Look up a file metadata entry by file ID.
@@ -318,8 +348,8 @@ impl<'a> MetadataReader<'a> {
 
         // Fast path: direct indexing (O(1) when IDs are sequential)
         if file_id.0 < self.entry_count {
-            let entry_offset = HEADER_SIZE + (file_id.0 as usize) * ENTRY_SIZE;
-            let entry_data = &self.data[entry_offset..entry_offset + ENTRY_SIZE];
+            let entry_offset = HEADER_SIZE + (file_id.0 as usize) * self.entry_size;
+            let entry_data = &self.data[entry_offset..entry_offset + self.entry_size];
             let stored_id = u32::from_le_bytes(entry_data[0..4].try_into().unwrap());
             if stored_id == file_id.0 {
                 let size = u32::from_le_bytes(
@@ -333,8 +363,8 @@ impl<'a> MetadataReader<'a> {
 
         // Slow path: linear scan for non-contiguous IDs
         for i in 0..self.entry_count {
-            let entry_offset = HEADER_SIZE + (i as usize) * ENTRY_SIZE;
-            let entry_data = &self.data[entry_offset..entry_offset + ENTRY_SIZE];
+            let entry_offset = HEADER_SIZE + (i as usize) * self.entry_size;
+            let entry_data = &self.data[entry_offset..entry_offset + self.entry_size];
             let stored_id = u32::from_le_bytes(entry_data[0..4].try_into().unwrap());
             if stored_id == file_id.0 {
                 let size = u32::from_le_bytes(
@@ -357,7 +387,7 @@ impl<'a> MetadataReader<'a> {
     pub fn find_file_id_by_path(&self, path: &str) -> Option<FileId> {
         let needle = path.as_bytes();
         for i in 0..self.entry_count {
-            let offset = HEADER_SIZE + (i as usize) * ENTRY_SIZE;
+            let offset = HEADER_SIZE + (i as usize) * self.entry_size;
             let entry_data = &self.data[offset..offset + ENTRY_SIZE];
 
             let path_offset = u32::from_le_bytes(entry_data[4..8].try_into().unwrap()) as usize;
@@ -394,8 +424,8 @@ impl<'a> MetadataReader<'a> {
     /// Returns [`IndexError::IndexCorruption`] if the path offset/length is
     /// out of bounds in the paths pool, or if the path bytes are not valid UTF-8.
     fn read_entry(&self, index: u32) -> Result<FileMetadata, IndexError> {
-        let offset = HEADER_SIZE + (index as usize) * ENTRY_SIZE;
-        let entry_data = &self.data[offset..offset + ENTRY_SIZE];
+        let offset = HEADER_SIZE + (index as usize) * self.entry_size;
+        let entry_data = &self.data[offset..offset + self.entry_size];
 
         let file_id = FileId(u32::from_le_bytes(entry_data[0..4].try_into().unwrap()));
         let path_offset = u32::from_le_bytes(entry_data[4..8].try_into().unwrap()) as usize;
@@ -411,6 +441,17 @@ impl<'a> MetadataReader<'a> {
         let line_count = u32::from_le_bytes(entry_data[42..46].try_into().unwrap());
         let content_offset = u64::from_le_bytes(entry_data[46..54].try_into().unwrap());
         let content_len = u32::from_le_bytes(entry_data[54..58].try_into().unwrap());
+
+        // v2 highlight fields (default to 0 for v1 segments)
+        let (highlight_offset, highlight_len, highlight_lines) = if self.entry_size >= ENTRY_SIZE {
+            (
+                u64::from_le_bytes(entry_data[58..66].try_into().unwrap()),
+                u32::from_le_bytes(entry_data[66..70].try_into().unwrap()),
+                u32::from_le_bytes(entry_data[70..74].try_into().unwrap()),
+            )
+        } else {
+            (0, 0, 0)
+        };
 
         let path_end = path_offset.checked_add(path_len).ok_or_else(|| {
             IndexError::IndexCorruption(format!(
@@ -437,6 +478,9 @@ impl<'a> MetadataReader<'a> {
             line_count,
             content_offset,
             content_len,
+            highlight_offset,
+            highlight_len,
+            highlight_lines,
         })
     }
 }
@@ -460,6 +504,9 @@ mod tests {
             line_count: 50 + id,
             content_offset: 4096 * id as u64,
             content_len: 500 + id,
+            highlight_offset: 0,
+            highlight_len: 0,
+            highlight_lines: 0,
         }
     }
 
@@ -576,7 +623,7 @@ mod tests {
 
         let expected_meta_size = HEADER_SIZE + 3 * ENTRY_SIZE;
         assert_eq!(meta_buf.len(), expected_meta_size);
-        assert_eq!(expected_meta_size, 10 + 3 * 58);
+        assert_eq!(expected_meta_size, 10 + 3 * 74);
 
         // paths.bin should contain all path strings concatenated
         let expected_paths_len = "src/main.rs".len() + "src/lib.rs".len() + "README.md".len();
@@ -848,6 +895,9 @@ mod tests {
             line_count: u32::MAX,
             content_offset: u64::MAX,
             content_len: u32::MAX,
+            highlight_offset: u64::MAX,
+            highlight_len: u32::MAX,
+            highlight_lines: u32::MAX,
         });
 
         let mut meta_buf = Vec::new();

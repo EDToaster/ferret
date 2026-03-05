@@ -1025,11 +1025,35 @@ async fn handle_connection(
                         Vec::new()
                     };
 
+                    // Load per-line highlight tokens for the requested range
+                    let highlight_tokens: Vec<Vec<ferret_indexer_core::highlight::Token>> =
+                        if entry.highlight_len > 0 {
+                            if let Some(hr) = seg.highlight_reader() {
+                                if let Ok(fh) = hr.read_file(
+                                    entry.highlight_offset,
+                                    entry.highlight_len,
+                                    entry.highlight_lines,
+                                ) {
+                                    // start/end are 1-based; tokens_for_line is 0-based
+                                    (start..=end)
+                                        .map(|line_num| fh.tokens_for_line(line_num - 1))
+                                        .collect()
+                                } else {
+                                    vec![vec![]; lines.len()]
+                                }
+                            } else {
+                                vec![vec![]; lines.len()]
+                            }
+                        } else {
+                            vec![vec![]; lines.len()]
+                        };
+
                     let resp = FileResponse {
                         path: entry.path,
                         language: entry.language.to_string(),
                         total_lines,
                         lines,
+                        highlight_tokens,
                     };
                     let payload = serde_json::to_string(&resp)
                         .map_err(|e| IndexError::Io(std::io::Error::other(e)))?;
