@@ -32,7 +32,7 @@ pub fn spawn_daemon_process(
     daemon_bin: &Path,
     repo_root: &Path,
     skip_catchup: bool,
-) -> Result<(), IndexError> {
+) -> Result<std::process::Child, IndexError> {
     let mut cmd = std::process::Command::new(daemon_bin);
     cmd.arg("daemon-start").arg("--repo").arg(repo_root);
     if skip_catchup {
@@ -50,8 +50,7 @@ pub fn spawn_daemon_process(
         cmd.process_group(0);
     }
 
-    cmd.spawn().map_err(IndexError::Io)?;
-    Ok(())
+    cmd.spawn().map_err(IndexError::Io)
 }
 
 /// Connect to a running daemon, or spawn one and wait for it to be ready.
@@ -68,7 +67,7 @@ pub async fn ensure_daemon(
     }
 
     // Spawn a new daemon process.
-    spawn_daemon_process(daemon_bin, repo_root, skip_catchup)?;
+    let mut child = spawn_daemon_process(daemon_bin, repo_root, skip_catchup)?;
 
     // Poll until the socket is ready or timeout.
     let deadline = tokio::time::Instant::now() + DAEMON_STARTUP_TIMEOUT;
@@ -76,6 +75,16 @@ pub async fn ensure_daemon(
         tokio::time::sleep(DAEMON_POLL_INTERVAL).await;
         if let Some(stream) = try_connect(repo_root).await {
             return Ok(stream);
+        }
+        // Check if daemon exited early (fast-fail).
+        if let Some(status) = child.try_wait().map_err(IndexError::Io)? {
+            return Err(IndexError::Io(std::io::Error::other(format!(
+                "daemon exited immediately (exit code: {})",
+                status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "signal".into())
+            ))));
         }
         if tokio::time::Instant::now() >= deadline {
             return Err(IndexError::Io(std::io::Error::new(

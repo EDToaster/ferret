@@ -94,19 +94,30 @@ fn run_live_indexing(
 /// The daemon loads the index from `repo_root/.indexrs/`, listens on the Unix
 /// socket, and serves requests until it has been idle for [`IDLE_TIMEOUT`].
 pub async fn start_daemon(repo_root: &Path, skip_catchup: bool) -> Result<(), IndexError> {
-    let sock_path = indexrs_daemon::socket_path(repo_root);
-
-    // Ensure the parent directory exists.
-    if let Some(parent) = sock_path.parent() {
-        std::fs::create_dir_all(parent)?;
+    // Fast-fail: repo path must exist.
+    if !repo_root.is_dir() {
+        return Err(IndexError::Config(format!(
+            "repository path does not exist: {}",
+            repo_root.display()
+        )));
     }
+
+    // Fast-fail: must be initialized (has .indexrs/).
+    let indexrs_dir = repo_root.join(".indexrs");
+    if !indexrs_dir.is_dir() {
+        return Err(IndexError::Config(format!(
+            "repository not initialized (no .indexrs/ directory): {} — run `indexrs init` first",
+            repo_root.display()
+        )));
+    }
+
+    let sock_path = indexrs_daemon::socket_path(repo_root);
 
     // Remove stale socket file.
     let _ = std::fs::remove_file(&sock_path);
 
     let listener = UnixListener::bind(&sock_path).map_err(IndexError::Io)?;
 
-    let indexrs_dir = repo_root.join(".indexrs");
     let manager = std::sync::Arc::new(SegmentManager::new(&indexrs_dir)?);
     let caught_up = std::sync::Arc::new(AtomicBool::new(false));
     let reindex_flag = std::sync::Arc::new(AtomicBool::new(false));
