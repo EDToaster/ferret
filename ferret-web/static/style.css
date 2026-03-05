@@ -658,6 +658,11 @@ mark {
     font-weight: 600;
 }
 
+.file-preview-repo {
+    color: var(--fg-muted);
+    font-weight: 500;
+}
+
 .file-preview-meta {
     font-size: 0.75rem;
     color: var(--fg-dim);
