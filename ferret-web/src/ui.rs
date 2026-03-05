@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -33,6 +35,7 @@ struct SearchResultsTemplate {
     files: Vec<FileMatch>,
     repo: String,
     query: String,
+    query_encoded: String,
     total_matches: usize,
     files_matched: usize,
     duration_ms: u64,
@@ -239,6 +242,22 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+/// Percent-encode a string for use in URL query values (RFC 3986 unreserved chars).
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            _ => {
+                write!(out, "%{byte:02X}").unwrap();
+            }
+        }
+    }
+    out
 }
 
 /// Map a `TokenKind` to its CSS class suffix, or `None` for kinds that inherit
@@ -589,6 +608,7 @@ pub async fn search_results_fragment(
         return render_template(SearchResultsTemplate {
             files: vec![],
             repo,
+            query_encoded: urlencode(&query),
             query,
             total_matches: 0,
             files_matched: 0,
@@ -606,6 +626,7 @@ pub async fn search_results_fragment(
             return render_template(SearchResultsTemplate {
                 files: vec![],
                 repo,
+                query_encoded: urlencode(&query),
                 query,
                 total_matches: 0,
                 files_matched: 0,
@@ -618,17 +639,21 @@ pub async fn search_results_fragment(
     };
 
     match proxy_search(state.daemon_bin(), &repo_path, &query, page, per_page).await {
-        Ok((files, stats)) => render_template(SearchResultsTemplate {
-            files,
-            repo,
-            query,
-            total_matches: stats.total_matches,
-            files_matched: stats.files_matched,
-            duration_ms: stats.duration_ms,
-            page: stats.page,
-            total_pages: stats.total_pages,
-            has_next: stats.has_next,
-        }),
+        Ok((files, stats)) => {
+            let query_encoded = urlencode(&query);
+            render_template(SearchResultsTemplate {
+                files,
+                repo,
+                query_encoded,
+                query,
+                total_matches: stats.total_matches,
+                files_matched: stats.files_matched,
+                duration_ms: stats.duration_ms,
+                page: stats.page,
+                total_pages: stats.total_pages,
+                has_next: stats.has_next,
+            })
+        }
         Err(e) => {
             tracing::error!("search proxy error: {e}");
             (StatusCode::BAD_GATEWAY, format!("Search failed: {e}")).into_response()

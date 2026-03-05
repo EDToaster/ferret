@@ -11,6 +11,32 @@ use tokio::io::{AsyncWriteExt, BufReader};
 
 use crate::AppState;
 
+/// Construct a typed offline/unknown `StatusResponse` and serialize it to JSON.
+/// Avoids hardcoded JSON strings that can drift out of sync with the struct.
+fn fallback_status_json(status: &str) -> String {
+    serde_json::to_string(&ferret_indexer_daemon::StatusResponse {
+        status: status.to_string(),
+        files_indexed: 0,
+        segments: 0,
+        index_bytes: 0,
+        last_indexed_ts: 0,
+        languages: vec![],
+        tombstone_ratio: 0.0,
+        path_valid: true,
+        tombstoned_count: 0,
+        content_bytes: 0,
+        trigrams_bytes: 0,
+        meta_paths_bytes: 0,
+        tombstones_bytes: 0,
+        symbols_bytes: 0,
+        segment_details: vec![],
+        language_extensions: vec![],
+        temp_bytes: 0,
+        is_compacting: false,
+    })
+    .unwrap_or_else(|_| format!(r#"{{"status":"{status}"}}"#))
+}
+
 #[derive(Deserialize)]
 pub struct SearchStreamParams {
     pub q: Option<String>,
@@ -153,18 +179,18 @@ pub async fn status_stream(
                         Ok(result) => {
                             // The first JSON payload is the StatusResponse.
                             result.payloads.into_iter().next().unwrap_or_else(|| {
-                                r#"{"status":"unknown","files_indexed":0,"segments":0,"index_bytes":0,"last_indexed_ts":0,"languages":[],"tombstone_ratio":0.0,"path_valid":true}"#.to_string()
+                                fallback_status_json("unknown")
                             })
                         }
                         Err(e) => {
                             tracing::warn!("status request failed: {e}");
-                            r#"{"status":"offline","files_indexed":0,"segments":0,"index_bytes":0,"last_indexed_ts":0,"languages":[],"tombstone_ratio":0.0,"path_valid":true}"#.to_string()
+                            fallback_status_json("offline")
                         }
                     }
                 }
                 Err(e) => {
                     tracing::debug!("daemon connect failed for status: {e}");
-                    r#"{"status":"offline","files_indexed":0,"segments":0,"index_bytes":0,"last_indexed_ts":0,"languages":[],"tombstone_ratio":0.0,"path_valid":true}"#.to_string()
+                    fallback_status_json("offline")
                 }
             };
 

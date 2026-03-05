@@ -660,6 +660,11 @@ mark {
     font-weight: 600;
 }
 
+.file-preview-repo {
+    color: var(--fg-muted);
+    font-weight: 500;
+}
+
 .file-preview-meta {
     font-size: 0.75rem;
     color: var(--fg-dim);
@@ -1393,20 +1398,13 @@ mark {
     border: 1px solid var(--border);
 }
 
-.symbol-kind--fn, .symbol-kind--method { color: #2563eb; border-color: #93c5fd; background: rgb(37 99 235 / 8%); }
-.symbol-kind--struct, .symbol-kind--class { color: #059669; border-color: #6ee7b7; background: rgb(5 150 105 / 8%); }
-.symbol-kind--trait, .symbol-kind--interface { color: #7c3aed; border-color: #c4b5fd; background: rgb(124 58 237 / 8%); }
-.symbol-kind--enum { color: #d97706; border-color: #fcd34d; background: rgb(217 119 6 / 8%); }
-.symbol-kind--const { color: #dc2626; border-color: #fca5a5; background: rgb(220 38 38 / 8%); }
-.symbol-kind--var, .symbol-kind--mod { color: #78716c; }
-.symbol-kind--type { color: #0891b2; border-color: #67e8f9; background: rgb(8 145 178 / 8%); }
-
-[data-theme="dark"] .symbol-kind--fn, [data-theme="dark"] .symbol-kind--method { color: #60a5fa; border-color: #1e40af; background: rgb(96 165 250 / 10%); }
-[data-theme="dark"] .symbol-kind--struct, [data-theme="dark"] .symbol-kind--class { color: #34d399; border-color: #065f46; background: rgb(52 211 153 / 10%); }
-[data-theme="dark"] .symbol-kind--trait, [data-theme="dark"] .symbol-kind--interface { color: #a78bfa; border-color: #5b21b6; background: rgb(167 139 250 / 10%); }
-[data-theme="dark"] .symbol-kind--enum { color: #fbbf24; border-color: #92400e; background: rgb(251 191 36 / 10%); }
-[data-theme="dark"] .symbol-kind--const { color: #f87171; border-color: #991b1b; background: rgb(248 113 113 / 10%); }
-[data-theme="dark"] .symbol-kind--type { color: #22d3ee; border-color: #155e75; background: rgb(34 211 238 / 10%); }
+.symbol-kind--fn, .symbol-kind--method { color: var(--tok-function); border-color: color-mix(in sRGB, var(--tok-function) 40%, transparent); background: color-mix(in sRGB, var(--tok-function) 8%, transparent); }
+.symbol-kind--struct, .symbol-kind--class { color: var(--tok-type); border-color: color-mix(in sRGB, var(--tok-type) 40%, transparent); background: color-mix(in sRGB, var(--tok-type) 8%, transparent); }
+.symbol-kind--trait, .symbol-kind--interface { color: var(--tok-macro); border-color: color-mix(in sRGB, var(--tok-macro) 40%, transparent); background: color-mix(in sRGB, var(--tok-macro) 8%, transparent); }
+.symbol-kind--enum { color: var(--tok-number); border-color: color-mix(in sRGB, var(--tok-number) 40%, transparent); background: color-mix(in sRGB, var(--tok-number) 8%, transparent); }
+.symbol-kind--const { color: var(--tok-constant); border-color: color-mix(in sRGB, var(--tok-constant) 40%, transparent); background: color-mix(in sRGB, var(--tok-constant) 8%, transparent); }
+.symbol-kind--var, .symbol-kind--mod { color: var(--tok-module); }
+.symbol-kind--type { color: var(--tok-type); border-color: color-mix(in sRGB, var(--tok-type) 40%, transparent); background: color-mix(in sRGB, var(--tok-type) 8%, transparent); }
 
 .symbol-name {
     font-weight: 700;
@@ -1635,3 +1633,72 @@ mark {
 .tok-attribute { color: var(--tok-attribute); }
 .tok-constant { color: var(--tok-constant); }
 .tok-module { color: var(--tok-module); }
+
+/* Responsive: collapse sidebar on narrow viewports */
+.sidebar-toggle {
+    display: none;
+    padding: 0.15rem 0.4rem;
+    font-size: 1rem;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--fg);
+    cursor: pointer;
+    line-height: 1;
+}
+
+@media (width <= 768px) {
+    .sidebar-toggle {
+        display: inline-flex;
+        align-items: center;
+    }
+
+    .sidebar {
+        position: fixed;
+        top: var(--header-height);
+        left: 0;
+        bottom: 0;
+        z-index: 50;
+        transform: translateX(-100%);
+        transition: transform 200ms ease;
+        width: 260px;
+        box-shadow: none;
+    }
+
+    .sidebar.sidebar--open {
+        transform: translateX(0);
+        box-shadow: var(--shadow-lg);
+    }
+
+    .file-header {
+        flex-wrap: wrap;
+        padding: 0.4rem 0.75rem;
+    }
+
+    .search-bar {
+        padding: 0.5rem 0.75rem;
+    }
+
+    .stats-line {
+        padding: 0.35rem 0.75rem;
+        font-size: 0.75rem;
+    }
+
+    .line-content {
+        padding: 0 0.4rem;
+    }
+
+    .repos-page {
+        padding: 0.5rem 0.75rem 2rem;
+    }
+
+    .repo-card-stats {
+        flex-wrap: wrap;
+        gap: 0.75rem;
+    }
+
+    .breakdown-legend {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+}

@@ -225,6 +225,22 @@
         });
     }
 
+    // Mobile sidebar toggle
+    var sidebarToggle = document.getElementById("sidebar-toggle");
+    if (sidebarToggle) {
+        sidebarToggle.addEventListener("click", function() {
+            var sidebar = document.querySelector(".sidebar");
+            if (sidebar) sidebar.classList.toggle("sidebar--open");
+        });
+        // Close sidebar when a repo is selected on mobile
+        document.addEventListener("click", function(e) {
+            if (e.target.closest(".sidebar-repo") && window.innerWidth <= 768) {
+                var sidebar = document.querySelector(".sidebar");
+                if (sidebar) sidebar.classList.remove("sidebar--open");
+            }
+        });
+    }
+
     // Toggle collapsible sections (e.g. segment detail table)
     // Persist expanded state in localStorage under "expanded-sections" (JSON array of IDs).
     var EXPANDED_KEY = "expanded-sections";
@@ -323,6 +339,56 @@
             if (panel) panel.classList.toggle("hidden");
         });
     }
+
+    // Preserve search state in URL for back-navigation
+    document.addEventListener("htmx:afterSwap", function(e) {
+        if (e.target && e.target.id === "results") {
+            var input = document.querySelector(".search-input");
+            var radio = document.querySelector(".sidebar-repo-radio:checked");
+            var mode = document.getElementById("search-mode");
+            if (input) {
+                var params = new URLSearchParams();
+                if (input.value) params.set("q", input.value);
+                if (radio) params.set("repo", radio.value);
+                if (mode && mode.value !== "text") params.set("mode", mode.value);
+                var url = params.toString() ? "/?" + params.toString() : "/";
+                history.replaceState(null, "", url);
+            }
+        }
+    });
+
+    // Restore search state from URL on page load
+    (function() {
+        var params = new URLSearchParams(window.location.search);
+        var q = params.get("q");
+        var repo = params.get("repo");
+        var mode = params.get("mode");
+        if (!q) return;
+        var input = document.querySelector(".search-input");
+        if (!input) return;
+        input.value = q;
+        if (repo) {
+            var radio = document.querySelector('.sidebar-repo-radio[value="' + CSS.escape(repo) + '"]');
+            if (radio) {
+                radio.checked = true;
+                var repoDiv = radio.closest(".sidebar-repo");
+                if (repoDiv) {
+                    document.querySelectorAll(".sidebar-repo").forEach(function(el) { el.classList.remove("sidebar-repo--active"); });
+                    repoDiv.classList.add("sidebar-repo--active");
+                }
+            }
+        }
+        if (mode && mode === "symbol") {
+            var modeInput = document.getElementById("search-mode");
+            if (modeInput) modeInput.value = mode;
+            var symBtn = document.getElementById("mode-symbol");
+            var textBtn = document.getElementById("mode-text");
+            if (symBtn) symBtn.classList.add("mode-btn--active");
+            if (textBtn) textBtn.classList.remove("mode-btn--active");
+        }
+        // Trigger the search to restore results
+        htmx.trigger(input, "search");
+    })();
 
     // Outline click-to-scroll
     document.addEventListener("click", function(e) {
