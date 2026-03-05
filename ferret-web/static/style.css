@@ -37,6 +37,7 @@
     --color-meta: #8b5cf6;
     --color-tombstones: #ef4444;
     --color-symbols: #06b6d4;
+    --color-highlights: #10b981;
 
     /* Syntax token colors */
     --tok-keyword: #8959a8;
@@ -82,6 +83,7 @@
     --color-meta: #a78bfa;
     --color-tombstones: #f87171;
     --color-symbols: #22d3ee;
+    --color-highlights: #34d399;
 
     /* Syntax token colors (dark) */
     --tok-keyword: #c678dd;
@@ -1109,6 +1111,18 @@ mark {
         var(--color-symbols);
 }
 
+.breakdown-bar--highlights {
+    background:
+        repeating-linear-gradient(
+            30deg,
+            transparent,
+            transparent 3px,
+            var(--bar-stripe) 3px,
+            var(--bar-stripe) 5px
+        ),
+        var(--color-highlights);
+}
+
 .breakdown-legend {
     display: flex;
     gap: 0.9rem;
@@ -1181,7 +1195,8 @@ mark {
 .repo-card-breakdown:has(.breakdown-legend-item[data-category="trigrams"]:hover) .breakdown-bar-seg[data-category="trigrams"],
 .repo-card-breakdown:has(.breakdown-legend-item[data-category="meta"]:hover) .breakdown-bar-seg[data-category="meta"],
 .repo-card-breakdown:has(.breakdown-legend-item[data-category="tombstones"]:hover) .breakdown-bar-seg[data-category="tombstones"],
-.repo-card-breakdown:has(.breakdown-legend-item[data-category="symbols"]:hover) .breakdown-bar-seg[data-category="symbols"] {
+.repo-card-breakdown:has(.breakdown-legend-item[data-category="symbols"]:hover) .breakdown-bar-seg[data-category="symbols"],
+.repo-card-breakdown:has(.breakdown-legend-item[data-category="highlights"]:hover) .breakdown-bar-seg[data-category="highlights"] {
     opacity: 1;
 }
 
@@ -1211,6 +1226,10 @@ mark {
 
 .breakdown-dot--symbols {
     background: var(--color-symbols);
+}
+
+.breakdown-dot--highlights {
+    background: var(--color-highlights);
 }
 
 /* Segments detail table */

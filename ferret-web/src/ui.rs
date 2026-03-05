@@ -120,6 +120,7 @@ pub struct SegmentDetailItem {
     pub meta_paths_bytes: String,
     pub tombstones_bytes: String,
     pub symbols_bytes: String,
+    pub highlights_bytes: String,
     pub temporary: bool,
 }
 
@@ -158,6 +159,8 @@ pub struct RepoOverviewItem {
     pub tombstones_pct: String,
     pub symbols_bytes: String,
     pub symbols_pct: String,
+    pub highlights_bytes: String,
+    pub highlights_pct: String,
     pub has_breakdown: bool,
     pub segment_details: Vec<SegmentDetailItem>,
     pub temp_bytes: String,
@@ -809,6 +812,7 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
             meta_paths_bytes_raw,
             tombstones_bytes_raw,
             symbols_bytes_raw,
+            highlights_bytes_raw,
             segment_details_raw,
             lang_extensions,
             temp_bytes_raw,
@@ -828,6 +832,7 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
                 sr.meta_paths_bytes,
                 sr.tombstones_bytes,
                 sr.symbols_bytes,
+                sr.highlights_bytes,
                 sr.segment_details,
                 sr.language_extensions,
                 sr.temp_bytes,
@@ -841,6 +846,7 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
                 vec![],
                 0.0,
                 path.is_dir(),
+                0,
                 0,
                 0,
                 0,
@@ -879,23 +885,33 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
             + trigrams_bytes_raw
             + meta_paths_bytes_raw
             + tombstones_bytes_raw
-            + symbols_bytes_raw;
-        let (content_pct, trigrams_pct, meta_pct, tombstones_pct, symbols_pct) =
+            + symbols_bytes_raw
+            + highlights_bytes_raw;
+        let (content_pct, trigrams_pct, meta_pct, tombstones_pct, symbols_pct, highlights_pct) =
             if total_breakdown > 0 {
                 let c = content_bytes_raw as f64 / total_breakdown as f64 * 100.0;
                 let t = trigrams_bytes_raw as f64 / total_breakdown as f64 * 100.0;
                 let m = meta_paths_bytes_raw as f64 / total_breakdown as f64 * 100.0;
                 let tb = tombstones_bytes_raw as f64 / total_breakdown as f64 * 100.0;
-                let s = 100.0 - c - t - m - tb;
+                let h = highlights_bytes_raw as f64 / total_breakdown as f64 * 100.0;
+                let s = 100.0 - c - t - m - tb - h;
                 (
                     format!("{c:.1}"),
                     format!("{t:.1}"),
                     format!("{m:.1}"),
                     format!("{tb:.1}"),
                     format!("{s:.1}"),
+                    format!("{h:.1}"),
                 )
             } else {
-                ("0".into(), "0".into(), "0".into(), "0".into(), "0".into())
+                (
+                    "0".into(),
+                    "0".into(),
+                    "0".into(),
+                    "0".into(),
+                    "0".into(),
+                    "0".into(),
+                )
             };
 
         let segment_details: Vec<SegmentDetailItem> = segment_details_raw
@@ -906,7 +922,8 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
                     + s.content_bytes
                     + s.tombstones_bytes
                     + s.symbols_bytes
-                    + s.sym_trigrams_bytes;
+                    + s.sym_trigrams_bytes
+                    + s.highlights_bytes;
                 SegmentDetailItem {
                     name: format!("seg_{:04}", s.id),
                     entry_count: s.entry_count,
@@ -917,6 +934,7 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
                     meta_paths_bytes: format_bytes(s.meta_paths_bytes),
                     tombstones_bytes: format_bytes(s.tombstones_bytes),
                     symbols_bytes: format_bytes(s.symbols_bytes + s.sym_trigrams_bytes),
+                    highlights_bytes: format_bytes(s.highlights_bytes),
                     temporary: s.temporary,
                 }
             })
@@ -949,6 +967,8 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
             tombstones_pct,
             symbols_bytes: format_bytes(symbols_bytes_raw),
             symbols_pct,
+            highlights_bytes: format_bytes(highlights_bytes_raw),
+            highlights_pct,
             has_breakdown: total_breakdown > 0,
             segment_details,
             temp_bytes: format_bytes(temp_bytes_raw),

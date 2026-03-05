@@ -53,6 +53,9 @@ pub struct SegmentInfo {
     pub symbols_bytes: u64,
     #[serde(default)]
     pub sym_trigrams_bytes: u64,
+    /// highlights.zst size in bytes.
+    #[serde(default)]
+    pub highlights_bytes: u64,
     /// Whether this is a temporary segment (in-progress build or compaction).
     #[serde(default)]
     pub temporary: bool,
@@ -96,6 +99,9 @@ pub struct StatusResponse {
     /// Aggregate symbols.bin + sym_trigrams.bin size in bytes.
     #[serde(default)]
     pub symbols_bytes: u64,
+    /// Aggregate highlights.zst size in bytes.
+    #[serde(default)]
+    pub highlights_bytes: u64,
     /// Per-segment breakdown.
     #[serde(default)]
     pub segment_details: Vec<SegmentInfo>,
@@ -271,6 +277,7 @@ mod tests {
             meta_paths_bytes: 500,
             tombstones_bytes: 200,
             symbols_bytes: 100,
+            highlights_bytes: 80,
             segment_details: vec![],
             language_extensions: vec![
                 ("Rust".to_string(), vec![("rs".to_string(), 100)]),

@@ -1103,6 +1103,7 @@ async fn handle_connection(
                 let mut agg_meta_paths_bytes: u64 = 0;
                 let mut agg_tombstones_bytes: u64 = 0;
                 let mut agg_symbols_bytes: u64 = 0;
+                let mut agg_highlights_bytes: u64 = 0;
                 let mut segment_details = Vec::with_capacity(snapshot.len());
 
                 for seg in snapshot.iter() {
@@ -1145,12 +1146,14 @@ async fn handle_connection(
                     let tombstones_b = file_size(&seg_dir.join("tombstones.bin"));
                     let symbols_b = file_size(&seg_dir.join("symbols.bin"));
                     let sym_trigrams_b = file_size(&seg_dir.join("sym_trigrams.bin"));
+                    let highlights_b = file_size(&seg_dir.join("highlights.zst"));
 
                     agg_trigrams_bytes += trigrams_b;
                     agg_meta_paths_bytes += meta_b + paths_b;
                     agg_content_bytes += content_b;
                     agg_tombstones_bytes += tombstones_b;
                     agg_symbols_bytes += symbols_b + sym_trigrams_b;
+                    agg_highlights_bytes += highlights_b;
 
                     segment_details.push(ferret_indexer_daemon::SegmentInfo {
                         id: seg.segment_id().0,
@@ -1162,6 +1165,7 @@ async fn handle_connection(
                         tombstones_bytes: tombstones_b,
                         symbols_bytes: symbols_b,
                         sym_trigrams_bytes: sym_trigrams_b,
+                        highlights_bytes: highlights_b,
                         temporary: false,
                     });
                 }
@@ -1220,6 +1224,7 @@ async fn handle_connection(
                         let tombstones_b = file_size(&dir.join("tombstones.bin"));
                         let symbols_b = file_size(&dir.join("symbols.bin"));
                         let sym_trigrams_b = file_size(&dir.join("sym_trigrams.bin"));
+                        let highlights_b = file_size(&dir.join("highlights.zst"));
 
                         // Count entries from meta.bin header if present.
                         let entry_count = std::fs::read(dir.join("meta.bin"))
@@ -1238,6 +1243,7 @@ async fn handle_connection(
                             tombstones_bytes: tombstones_b,
                             symbols_bytes: symbols_b,
                             sym_trigrams_bytes: sym_trigrams_b,
+                            highlights_bytes: highlights_b,
                             temporary: true,
                         });
                     }
@@ -1270,6 +1276,7 @@ async fn handle_connection(
                     meta_paths_bytes: agg_meta_paths_bytes,
                     tombstones_bytes: agg_tombstones_bytes,
                     symbols_bytes: agg_symbols_bytes,
+                    highlights_bytes: agg_highlights_bytes,
                     segment_details,
                     language_extensions,
                     temp_bytes,
