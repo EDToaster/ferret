@@ -291,6 +291,12 @@ a:hover {
     font-size: 0.8rem;
     overflow-x: auto;
     line-height: 1.45;
+    background:
+        linear-gradient(to right,
+            var(--line-number-bg) 4rem,
+            var(--border-subtle) 4rem,
+            var(--border-subtle) calc(4rem + 1px),
+            transparent calc(4rem + 1px));
 }
 
 .code-line {
@@ -318,6 +324,9 @@ a:hover {
     user-select: none;
     border-right: 1px solid var(--border-subtle);
     font-variant-numeric: tabular-nums;
+    position: sticky;
+    left: 0;
+    z-index: 1;
 }
 
 .code-line--match .line-number {
@@ -1434,6 +1443,7 @@ mark {
     flex: 1;
     min-width: 0;
     overflow-y: auto;
+    padding-top: 0.4rem;
     padding-bottom: 25vh;
 }
 
