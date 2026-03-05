@@ -29,6 +29,7 @@ fn fallback_status_json(status: &str) -> String {
         meta_paths_bytes: 0,
         tombstones_bytes: 0,
         symbols_bytes: 0,
+        highlights_bytes: 0,
         segment_details: vec![],
         language_extensions: vec![],
         temp_bytes: 0,
