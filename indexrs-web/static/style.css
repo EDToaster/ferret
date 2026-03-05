@@ -1352,7 +1352,7 @@ mark {
 
 .symbol-kind {
     display: inline-block;
-    min-width: 3.5em;
+    width: 5em;
     padding: 0.1rem 0.35rem;
     font-size: 0.7rem;
     font-weight: 700;
