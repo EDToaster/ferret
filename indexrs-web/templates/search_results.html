@@ -48,9 +48,38 @@
 {% endif %}
 {% else %}
     {% if !query.is_empty() %}
-    <div class="empty-state">
-        <p>No results for "{{ query }}"</p>
+    <div class="empty-state empty-state--no-results">
+        <pre class="ferret-art" aria-hidden="true"></pre>
+        <p class="ferret-msg"></p>
         <p class="hint">Try a different query or select another repository</p>
+        <script>
+        (function() {
+            var ferrets = [
+                ["   ／l、\n （ﾟ､ ｡ ７\n   l  ~ヽ\n   じしf_,)ノ", [
+                    "Searched every nook and cranny... nothing!",
+                    "Even my whiskers couldn't sense that one.",
+                    "I dug through every tunnel. Nada.",
+                ]],
+                ["     ∧,,,∧\n    ( ̳• · • ̳)\n    /    づ♡", [
+                    "No matches, but here's some love.",
+                    "Nothing found... but I still like you.",
+                    "Zero results. Infinite affection.",
+                ]],
+                ["  ⸜( ˃ ᵕ ˂ )⸝\n    /|    |\\", [
+                    "I looked everywhere, I promise!",
+                    "Maybe it's in another repo?",
+                    "The code you seek does not exist... yet.",
+                ]],
+            ];
+            var pick = ferrets[Math.floor(Math.random() * ferrets.length)];
+            var msgs = pick[1];
+            var el = document.querySelector('.empty-state--no-results');
+            if (el) {
+                el.querySelector('.ferret-art').textContent = pick[0];
+                el.querySelector('.ferret-msg').textContent = msgs[Math.floor(Math.random() * msgs.length)];
+            }
+        })();
+        </script>
     </div>
     {% else %}
     <div class="empty-state">
