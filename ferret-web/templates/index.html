@@ -11,7 +11,7 @@
              data-repo="{{ repo.name }}"
              hx-get="/search-results" hx-trigger="click"
              hx-target="#results" hx-include=".search-input, #search-mode"
-             hx-vals='{"repo-select":"{{ repo.name }}"}'>
+             hx-vals='js:{"repo-select": this.dataset.repo}'>
             <input type="radio" name="repo-select" value="{{ repo.name }}"
                    {% if repo.name == selected_repo %}checked{% endif %}
                    class="sidebar-repo-radio">
