@@ -225,6 +225,22 @@
         });
     }
 
+    // Mobile sidebar toggle
+    var sidebarToggle = document.getElementById("sidebar-toggle");
+    if (sidebarToggle) {
+        sidebarToggle.addEventListener("click", function() {
+            var sidebar = document.querySelector(".sidebar");
+            if (sidebar) sidebar.classList.toggle("sidebar--open");
+        });
+        // Close sidebar when a repo is selected on mobile
+        document.addEventListener("click", function(e) {
+            if (e.target.closest(".sidebar-repo") && window.innerWidth <= 768) {
+                var sidebar = document.querySelector(".sidebar");
+                if (sidebar) sidebar.classList.remove("sidebar--open");
+            }
+        });
+    }
+
     // Toggle collapsible sections (e.g. segment detail table)
     // Persist expanded state in localStorage under "expanded-sections" (JSON array of IDs).
     var EXPANDED_KEY = "expanded-sections";
