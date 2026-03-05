@@ -2,6 +2,7 @@ use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
+use ferret_indexer_core::highlight::{Token, TokenKind};
 use ferret_indexer_core::search::FileMatch;
 use serde::Deserialize;
 
@@ -64,6 +65,20 @@ impl SearchResultsTemplate {
             out.push_str(&html_escape(&content[pos..]));
         }
         out
+    }
+
+    /// Produce HTML with both syntax highlighting and match `<mark>` tags.
+    fn highlight_line_with_tokens(
+        content: &str,
+        tokens: &[Token],
+        ranges: &[(usize, usize)],
+    ) -> String {
+        tokenize_html_with_marks(content, tokens, ranges)
+    }
+
+    /// Produce HTML with syntax highlighting for a context line.
+    fn highlight_context(content: &str, tokens: &[Token]) -> String {
+        tokenize_html(content, tokens)
     }
 }
 
@@ -221,6 +236,128 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+/// Map a `TokenKind` to its CSS class suffix, or `None` for kinds that inherit
+/// the default foreground color (Plain, Variable, Operator, Punctuation, Label, Other).
+fn token_css_class(kind: TokenKind) -> Option<&'static str> {
+    match kind {
+        TokenKind::Keyword => Some("tok-keyword"),
+        TokenKind::String => Some("tok-string"),
+        TokenKind::Comment => Some("tok-comment"),
+        TokenKind::Number => Some("tok-number"),
+        TokenKind::Function => Some("tok-function"),
+        TokenKind::Type => Some("tok-type"),
+        TokenKind::Macro => Some("tok-macro"),
+        TokenKind::Attribute => Some("tok-attribute"),
+        TokenKind::Constant => Some("tok-constant"),
+        TokenKind::Module => Some("tok-module"),
+        _ => None,
+    }
+}
+
+/// Render a line's content with syntax-highlight `<span>` wrappers.
+/// Falls back to plain `html_escape` when tokens are empty.
+fn tokenize_html(content: &str, tokens: &[Token]) -> String {
+    if tokens.is_empty() {
+        return html_escape(content);
+    }
+    let mut out = String::with_capacity(content.len() * 2);
+    let mut pos = 0;
+    for tok in tokens {
+        let end = (pos + tok.len).min(content.len());
+        let slice = &content[pos..end];
+        if let Some(cls) = token_css_class(tok.kind) {
+            out.push_str("<span class=\"");
+            out.push_str(cls);
+            out.push_str("\">");
+            out.push_str(&html_escape(slice));
+            out.push_str("</span>");
+        } else {
+            out.push_str(&html_escape(slice));
+        }
+        pos = end;
+    }
+    // Remainder (if tokens don't cover the full line)
+    if pos < content.len() {
+        out.push_str(&html_escape(&content[pos..]));
+    }
+    out
+}
+
+/// Render a line with both syntax-highlight spans and `<mark>` tags for search
+/// match ranges.  Match `<mark>` tags nest inside syntax spans when they overlap.
+/// Falls back to `highlight_line()` when tokens are empty.
+fn tokenize_html_with_marks(content: &str, tokens: &[Token], ranges: &[(usize, usize)]) -> String {
+    if tokens.is_empty() {
+        return SearchResultsTemplate::highlight_line(content, ranges);
+    }
+    if ranges.is_empty() {
+        return tokenize_html(content, tokens);
+    }
+
+    let mut out = String::with_capacity(content.len() * 3);
+    let mut tok_pos: usize = 0; // byte offset tracking token boundaries
+    let mut range_idx = 0;
+
+    for tok in tokens {
+        let tok_start = tok_pos;
+        let tok_end = (tok_pos + tok.len).min(content.len());
+        tok_pos = tok_end;
+
+        let cls = token_css_class(tok.kind);
+
+        // We need to emit the token span, interleaving <mark> tags for any
+        // overlapping match ranges.
+        if let Some(c) = cls {
+            out.push_str("<span class=\"");
+            out.push_str(c);
+            out.push_str("\">");
+        }
+
+        let mut cursor = tok_start;
+        while cursor < tok_end {
+            // Advance past ranges that end before cursor
+            while range_idx < ranges.len() && ranges[range_idx].1 <= cursor {
+                range_idx += 1;
+            }
+
+            if range_idx < ranges.len() {
+                let (rs, re) = ranges[range_idx];
+                let rs = rs.min(content.len());
+                let re = re.min(content.len());
+
+                if rs > cursor {
+                    // Gap before next match range (within this token)
+                    let gap_end = rs.min(tok_end);
+                    out.push_str(&html_escape(&content[cursor..gap_end]));
+                    cursor = gap_end;
+                } else {
+                    // We're inside a match range
+                    let mark_end = re.min(tok_end);
+                    out.push_str("<mark>");
+                    out.push_str(&html_escape(&content[cursor..mark_end]));
+                    out.push_str("</mark>");
+                    cursor = mark_end;
+                }
+            } else {
+                // No more ranges — emit rest of token
+                out.push_str(&html_escape(&content[cursor..tok_end]));
+                cursor = tok_end;
+            }
+        }
+
+        if cls.is_some() {
+            out.push_str("</span>");
+        }
+    }
+
+    // Remainder beyond tokens
+    if tok_pos < content.len() {
+        out.push_str(&html_escape(&content[tok_pos..]));
+    }
+
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -513,9 +650,19 @@ pub async fn file_preview(
         Ok(file_resp) => {
             let lines: Vec<(usize, String)> = file_resp
                 .lines
-                .into_iter()
+                .iter()
+                .zip(
+                    file_resp
+                        .highlight_tokens
+                        .iter()
+                        .map(Some)
+                        .chain(std::iter::repeat(None)),
+                )
                 .enumerate()
-                .map(|(i, content)| (i + 1, content))
+                .map(|(i, (content, tokens))| {
+                    let html = tokenize_html(content, tokens.map_or(&[], |t| t.as_slice()));
+                    (i + 1, html)
+                })
                 .collect();
 
             render_template(FilePreviewTemplate {

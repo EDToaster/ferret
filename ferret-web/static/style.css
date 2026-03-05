@@ -37,6 +37,18 @@
     --color-meta: #8b5cf6;
     --color-tombstones: #ef4444;
     --color-symbols: #06b6d4;
+
+    /* Syntax token colors */
+    --tok-keyword: #8959a8;
+    --tok-string: #718c00;
+    --tok-comment: #8e908c;
+    --tok-number: #f5871f;
+    --tok-function: #4271ae;
+    --tok-type: #c18401;
+    --tok-macro: #a626a4;
+    --tok-attribute: #9a6700;
+    --tok-constant: #d75f00;
+    --tok-module: #0550ae;
 }
 
 /* Dark mode — applied via data-theme attribute or system preference */
@@ -70,6 +82,18 @@
     --color-meta: #a78bfa;
     --color-tombstones: #f87171;
     --color-symbols: #22d3ee;
+
+    /* Syntax token colors (dark) */
+    --tok-keyword: #c678dd;
+    --tok-string: #98c379;
+    --tok-comment: #5c6370;
+    --tok-number: #d19a66;
+    --tok-function: #61afef;
+    --tok-type: #e5c07b;
+    --tok-macro: #c678dd;
+    --tok-attribute: #d19a66;
+    --tok-constant: #e06c75;
+    --tok-module: #61afef;
 }
 
 /* Reset & base */
@@ -1580,3 +1604,15 @@ mark {
 .quickopen-results .empty-state {
     padding: 2rem 1rem;
 }
+
+/* Syntax highlight token classes */
+.tok-keyword { color: var(--tok-keyword); }
+.tok-string { color: var(--tok-string); }
+.tok-comment { color: var(--tok-comment); font-style: italic; }
+.tok-number { color: var(--tok-number); }
+.tok-function { color: var(--tok-function); }
+.tok-type { color: var(--tok-type); }
+.tok-macro { color: var(--tok-macro); }
+.tok-attribute { color: var(--tok-attribute); }
+.tok-constant { color: var(--tok-constant); }
+.tok-module { color: var(--tok-module); }

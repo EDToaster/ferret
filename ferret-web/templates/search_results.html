@@ -14,17 +14,17 @@
         {% for ctx in &line.context_before %}
         <div class="code-line code-line--context">
             <span class="line-number">{{ ctx.line_number }}</span>
-            <span class="line-content">{{ ctx.content }}</span>
+            <span class="line-content">{{ Self::highlight_context(&ctx.content, &ctx.highlight_tokens)|safe }}</span>
         </div>
         {% endfor %}
         <div class="code-line code-line--match">
             <span class="line-number">{{ line.line_number }}</span>
-            <span class="line-content">{{ Self::highlight_line(&line.content, &line.ranges)|safe }}</span>
+            <span class="line-content">{{ Self::highlight_line_with_tokens(&line.content, &line.highlight_tokens, &line.ranges)|safe }}</span>
         </div>
         {% for ctx in &line.context_after %}
         <div class="code-line code-line--context">
             <span class="line-number">{{ ctx.line_number }}</span>
-            <span class="line-content">{{ ctx.content }}</span>
+            <span class="line-content">{{ Self::highlight_context(&ctx.content, &ctx.highlight_tokens)|safe }}</span>
         </div>
         {% endfor %}
     {% endfor %}

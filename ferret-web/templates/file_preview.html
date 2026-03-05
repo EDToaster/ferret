@@ -25,7 +25,7 @@
             {% for line in &lines %}
                 <div class="code-line" id="L{{ line.0 }}">
                     <span class="line-number">{{ line.0 }}</span>
-                    <span class="line-content">{{ line.1 }}</span>
+                    <span class="line-content">{{ line.1|safe }}</span>
                 </div>
             {% endfor %}
             </div>

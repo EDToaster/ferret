@@ -254,6 +254,5 @@ Linear project name: ferret (team: HHC). Design docs live in `docs/design/`, imp
 Before committing changes, make sure your changes pass the CI checks locally
 
 ```bash
-cargo clippy --workspace -- -D warnings
-cargo fmt --all -- --check
+make lint-all # runs test, lint, and check
 ```
