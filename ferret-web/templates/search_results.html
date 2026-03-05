@@ -34,13 +34,13 @@
 {% if total_pages > 1 %}
 <div class="pagination">
     {% if page > 1 %}
-    <button type="button" hx-get="/search-results?q={{ query }}&amp;repo-select={{ repo }}&amp;page={{ page - 1 }}" hx-target="#results">Prev</button>
+    <button type="button" hx-get="/search-results?q={{ query_encoded }}&amp;repo-select={{ repo }}&amp;page={{ page - 1 }}" hx-target="#results">Prev</button>
     {% else %}
     <span class="disabled">Prev</span>
     {% endif %}
     <span class="current">{{ page }} / {{ total_pages }}</span>
     {% if has_next %}
-    <button type="button" hx-get="/search-results?q={{ query }}&amp;repo-select={{ repo }}&amp;page={{ page + 1 }}" hx-target="#results">Next</button>
+    <button type="button" hx-get="/search-results?q={{ query_encoded }}&amp;repo-select={{ repo }}&amp;page={{ page + 1 }}" hx-target="#results">Next</button>
     {% else %}
     <span class="disabled">Next</span>
     {% endif %}
