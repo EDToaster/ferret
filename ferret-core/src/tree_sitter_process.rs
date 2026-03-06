@@ -275,10 +275,20 @@ mod tests {
     #[test]
     fn test_process_file_unsupported_language() {
         let src = b"echo hello";
-        let results = process_file(src, Language::Shell, FileId(0));
+        let results = process_file(src, Language::Nix, FileId(0));
         assert!(results.highlights.is_none());
         #[cfg(feature = "symbols")]
         assert!(results.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_process_file_shell_produces_highlights() {
+        let src = b"#!/bin/bash\necho \"hello world\"\n";
+        let results = process_file(src, Language::Shell, FileId(0));
+        assert!(
+            results.highlights.is_some(),
+            "Shell should produce highlights"
+        );
     }
 
     #[test]
@@ -312,6 +322,217 @@ mod tests {
             highlights[0]
                 .iter()
                 .any(|t| t.kind == crate::highlight::TokenKind::Comment)
+        );
+    }
+
+    /// Helper: assert a language produces highlights and contains an expected token kind.
+    fn assert_highlights(
+        src: &[u8],
+        lang: Language,
+        expected_kind: crate::highlight::TokenKind,
+        description: &str,
+    ) {
+        let results = process_file(src, lang, FileId(0));
+        let highlights = results
+            .highlights
+            .unwrap_or_else(|| panic!("{lang:?} should produce highlights"));
+        assert!(
+            !highlights.is_empty(),
+            "{lang:?} highlights should not be empty"
+        );
+        let has_kind = highlights
+            .iter()
+            .any(|line| line.iter().any(|t| t.kind == expected_kind));
+        assert!(has_kind, "{lang:?}: expected {description}");
+    }
+
+    #[test]
+    fn test_highlight_python() {
+        assert_highlights(
+            b"def hello():\n    return \"world\"\n",
+            Language::Python,
+            crate::highlight::TokenKind::Keyword,
+            "keyword (def)",
+        );
+    }
+
+    #[test]
+    fn test_highlight_typescript() {
+        assert_highlights(
+            b"function greet(name: string): void {\n  console.log(name);\n}\n",
+            Language::TypeScript,
+            crate::highlight::TokenKind::Type,
+            "type (string/void)",
+        );
+    }
+
+    #[test]
+    fn test_highlight_javascript() {
+        assert_highlights(
+            b"function greet(name) {\n  return name + \" world\";\n}\n",
+            Language::JavaScript,
+            crate::highlight::TokenKind::Variable,
+            "variable (name)",
+        );
+    }
+
+    #[test]
+    fn test_highlight_go() {
+        assert_highlights(
+            b"package main\n\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n",
+            Language::Go,
+            crate::highlight::TokenKind::Keyword,
+            "keyword (package/func)",
+        );
+    }
+
+    #[test]
+    fn test_highlight_c() {
+        assert_highlights(
+            b"#include <stdio.h>\nint main() { return 0; }\n",
+            Language::C,
+            crate::highlight::TokenKind::Type,
+            "type (int)",
+        );
+    }
+
+    #[test]
+    fn test_highlight_cpp() {
+        assert_highlights(
+            b"int main() { return 0; }\n",
+            Language::Cpp,
+            crate::highlight::TokenKind::Type,
+            "type (int)",
+        );
+    }
+
+    #[test]
+    fn test_highlight_ruby() {
+        assert_highlights(
+            b"def greet(name)\n  puts \"Hello #{name}\"\nend\n",
+            Language::Ruby,
+            crate::highlight::TokenKind::Keyword,
+            "keyword (def/end)",
+        );
+    }
+
+    #[test]
+    fn test_highlight_java() {
+        assert_highlights(
+            b"public class Main {\n  public static void main(String[] args) {}\n}\n",
+            Language::Java,
+            crate::highlight::TokenKind::Keyword,
+            "keyword (public/class)",
+        );
+    }
+
+    #[test]
+    fn test_highlight_shell_keywords() {
+        assert_highlights(
+            b"if [ -f file ]; then\n  echo \"found\"\nfi\n",
+            Language::Shell,
+            crate::highlight::TokenKind::Keyword,
+            "keyword (if/then/fi)",
+        );
+    }
+
+    #[test]
+    fn test_highlight_swift() {
+        assert_highlights(
+            b"func greet(_ name: String) -> String {\n  return \"Hello \\(name)\"\n}\n",
+            Language::Swift,
+            crate::highlight::TokenKind::Keyword,
+            "keyword (func/return)",
+        );
+    }
+
+    #[test]
+    fn test_highlight_csharp() {
+        assert_highlights(
+            b"public class Greeter {\n  public string Greet() { return \"hi\"; }\n}\n",
+            Language::CSharp,
+            crate::highlight::TokenKind::Keyword,
+            "keyword (public/class/return)",
+        );
+    }
+
+    #[test]
+    fn test_highlight_scala() {
+        assert_highlights(
+            b"object Main {\n  def main(args: Array[String]): Unit = {\n    println(\"hello\")\n  }\n}\n",
+            Language::Scala,
+            crate::highlight::TokenKind::Keyword,
+            "keyword (object/def)",
+        );
+    }
+
+    #[test]
+    fn test_highlight_yaml() {
+        assert_highlights(
+            b"name: ferret\nversion: \"1.0\"\nenabled: true\n",
+            Language::Yaml,
+            crate::highlight::TokenKind::String,
+            "string value",
+        );
+    }
+
+    #[test]
+    fn test_highlight_toml() {
+        assert_highlights(
+            b"[package]\nname = \"ferret\"\nversion = \"0.1.0\"\n",
+            Language::Toml,
+            crate::highlight::TokenKind::String,
+            "string value",
+        );
+    }
+
+    #[test]
+    fn test_highlight_json() {
+        assert_highlights(
+            b"{\"name\": \"ferret\", \"count\": 42}\n",
+            Language::Json,
+            crate::highlight::TokenKind::String,
+            "string key/value",
+        );
+    }
+
+    #[test]
+    fn test_highlight_xml() {
+        assert_highlights(
+            b"<root>\n  <item id=\"1\">hello</item>\n</root>\n",
+            Language::Xml,
+            crate::highlight::TokenKind::String,
+            "attribute string value",
+        );
+    }
+
+    #[test]
+    fn test_highlight_html() {
+        assert_highlights(
+            b"<!-- comment -->\n<html><body>Hello</body></html>\n",
+            Language::Html,
+            crate::highlight::TokenKind::Comment,
+            "comment",
+        );
+    }
+
+    #[test]
+    fn test_highlight_css() {
+        assert_highlights(
+            b"body {\n  color: red;\n  font-size: 14px;\n}\n",
+            Language::Css,
+            crate::highlight::TokenKind::Number,
+            "number (14px)",
+        );
+    }
+
+    #[test]
+    fn test_highlight_sql() {
+        assert_highlights(
+            b"SELECT id, name FROM users WHERE active = true;\n",
+            Language::Sql,
+            crate::highlight::TokenKind::Keyword,
+            "keyword (SELECT/FROM/WHERE)",
         );
     }
 }

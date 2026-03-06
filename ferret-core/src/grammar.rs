@@ -16,6 +16,9 @@ pub struct LanguageConfig {
     pub symbol_query: Option<tree_sitter::Query>,
 }
 
+/// C# highlight query (bundled from tree-sitter-c-sharp, not exported by the crate).
+const CSHARP_HIGHLIGHTS_QUERY: &str = include_str!("queries/csharp_highlights.scm");
+
 /// Get the cached `LanguageConfig` for a given language, or `None` if unsupported.
 pub fn language_config(lang: Language) -> Option<&'static LanguageConfig> {
     static CACHE: OnceLock<HashMap<Language, LanguageConfig>> = OnceLock::new();
@@ -76,6 +79,73 @@ pub fn language_config(lang: Language) -> Option<&'static LanguageConfig> {
                     tree_sitter_java::HIGHLIGHTS_QUERY,
                     Some(super::symbol_extractor::JAVA_QUERY),
                 ),
+                // New languages (highlight-only, no symbol queries)
+                (
+                    Language::Shell,
+                    tree_sitter_bash::LANGUAGE.into(),
+                    tree_sitter_bash::HIGHLIGHT_QUERY,
+                    None,
+                ),
+                (
+                    Language::Swift,
+                    tree_sitter_swift::LANGUAGE.into(),
+                    tree_sitter_swift::HIGHLIGHTS_QUERY,
+                    None,
+                ),
+                (
+                    Language::CSharp,
+                    tree_sitter_c_sharp::LANGUAGE.into(),
+                    CSHARP_HIGHLIGHTS_QUERY,
+                    None,
+                ),
+                (
+                    Language::Scala,
+                    tree_sitter_scala::LANGUAGE.into(),
+                    tree_sitter_scala::HIGHLIGHTS_QUERY,
+                    None,
+                ),
+                (
+                    Language::Yaml,
+                    tree_sitter_yaml::LANGUAGE.into(),
+                    tree_sitter_yaml::HIGHLIGHTS_QUERY,
+                    None,
+                ),
+                (
+                    Language::Toml,
+                    tree_sitter_toml_ng::LANGUAGE.into(),
+                    tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
+                    None,
+                ),
+                (
+                    Language::Json,
+                    tree_sitter_json::LANGUAGE.into(),
+                    tree_sitter_json::HIGHLIGHTS_QUERY,
+                    None,
+                ),
+                (
+                    Language::Xml,
+                    tree_sitter_xml::LANGUAGE_XML.into(),
+                    tree_sitter_xml::XML_HIGHLIGHT_QUERY,
+                    None,
+                ),
+                (
+                    Language::Html,
+                    tree_sitter_html::LANGUAGE.into(),
+                    tree_sitter_html::HIGHLIGHTS_QUERY,
+                    None,
+                ),
+                (
+                    Language::Css,
+                    tree_sitter_css::LANGUAGE.into(),
+                    tree_sitter_css::HIGHLIGHTS_QUERY,
+                    None,
+                ),
+                (
+                    Language::Sql,
+                    tree_sitter_sequel::LANGUAGE.into(),
+                    tree_sitter_sequel::HIGHLIGHTS_QUERY,
+                    None,
+                ),
             ];
             let mut map = HashMap::with_capacity(entries.len());
             for (lang, ts_lang, hl_query_src, sym_query_src) in entries {
@@ -118,6 +188,17 @@ mod tests {
             Language::Cpp,
             Language::Ruby,
             Language::Java,
+            Language::Shell,
+            Language::Swift,
+            Language::CSharp,
+            Language::Scala,
+            Language::Yaml,
+            Language::Toml,
+            Language::Json,
+            Language::Xml,
+            Language::Html,
+            Language::Css,
+            Language::Sql,
         ] {
             let config = language_config(lang);
             assert!(config.is_some(), "should have config for {lang:?}");
@@ -132,7 +213,6 @@ mod tests {
 
     #[test]
     fn test_language_config_none_for_unsupported() {
-        assert!(language_config(Language::Shell).is_none());
         assert!(language_config(Language::Unknown).is_none());
     }
 
