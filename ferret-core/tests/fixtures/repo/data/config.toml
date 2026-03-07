@@ -1,0 +1,7 @@
+[project]
+name = "ferret-test"
+version = "0.1.0"
+
+[settings]
+max_results = 100
+enable_cache = true
