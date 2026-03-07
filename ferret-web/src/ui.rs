@@ -1005,6 +1005,343 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
     render_template(ReposTemplate { repos, repo_count })
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ferret_indexer_core::highlight::{Token, TokenKind};
+
+    // -- html_escape ---------------------------------------------------------
+
+    #[test]
+    fn html_escape_plain_text() {
+        assert_eq!(html_escape("hello world"), "hello world");
+    }
+
+    #[test]
+    fn html_escape_all_special_chars() {
+        assert_eq!(html_escape(r#"<div class="a&b">"#), "&lt;div class=&quot;a&amp;b&quot;&gt;");
+    }
+
+    #[test]
+    fn html_escape_empty() {
+        assert_eq!(html_escape(""), "");
+    }
+
+    // -- urlencode -----------------------------------------------------------
+
+    #[test]
+    fn urlencode_passthrough() {
+        assert_eq!(urlencode("hello-world_1.0~beta"), "hello-world_1.0~beta");
+    }
+
+    #[test]
+    fn urlencode_spaces_and_special() {
+        assert_eq!(urlencode("fn main()"), "fn%20main%28%29");
+    }
+
+    #[test]
+    fn urlencode_empty() {
+        assert_eq!(urlencode(""), "");
+    }
+
+    #[test]
+    fn urlencode_all_encoded() {
+        assert_eq!(urlencode("a b+c"), "a%20b%2Bc");
+    }
+
+    // -- format_bytes --------------------------------------------------------
+
+    #[test]
+    fn format_bytes_zero() {
+        assert_eq!(format_bytes(0), "0 B");
+    }
+
+    #[test]
+    fn format_bytes_below_kb() {
+        assert_eq!(format_bytes(1023), "1023 B");
+    }
+
+    #[test]
+    fn format_bytes_exactly_kb() {
+        assert_eq!(format_bytes(1024), "1.0 KB");
+    }
+
+    #[test]
+    fn format_bytes_kb_range() {
+        assert_eq!(format_bytes(1536), "1.5 KB");
+    }
+
+    #[test]
+    fn format_bytes_exactly_mb() {
+        assert_eq!(format_bytes(1024 * 1024), "1.0 MB");
+    }
+
+    #[test]
+    fn format_bytes_mb_range() {
+        assert_eq!(format_bytes(2_621_440), "2.5 MB");
+    }
+
+    #[test]
+    fn format_bytes_exactly_gb() {
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.0 GB");
+    }
+
+    #[test]
+    fn format_bytes_gb_range() {
+        assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3.0 GB");
+    }
+
+    // -- format_relative_time ------------------------------------------------
+
+    #[test]
+    fn format_relative_time_zero_is_never() {
+        assert_eq!(format_relative_time(0), "never");
+    }
+
+    #[test]
+    fn format_relative_time_future_is_just_now() {
+        let future = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 9999;
+        assert_eq!(format_relative_time(future), "just now");
+    }
+
+    #[test]
+    fn format_relative_time_seconds_ago() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let result = format_relative_time(now - 30);
+        assert!(result.ends_with("s ago"), "expected seconds, got: {result}");
+    }
+
+    #[test]
+    fn format_relative_time_minutes_ago() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let result = format_relative_time(now - 300);
+        assert!(result.ends_with("m ago"), "expected minutes, got: {result}");
+    }
+
+    #[test]
+    fn format_relative_time_hours_ago() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let result = format_relative_time(now - 7200);
+        assert!(result.ends_with("h ago"), "expected hours, got: {result}");
+    }
+
+    #[test]
+    fn format_relative_time_days_ago() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let result = format_relative_time(now - 172800);
+        assert!(result.ends_with("d ago"), "expected days, got: {result}");
+    }
+
+    // -- token_css_class -----------------------------------------------------
+
+    #[test]
+    fn token_css_class_keyword() {
+        assert_eq!(token_css_class(TokenKind::Keyword), Some("tok-keyword"));
+    }
+
+    #[test]
+    fn token_css_class_plain_returns_none() {
+        assert_eq!(token_css_class(TokenKind::Plain), None);
+    }
+
+    #[test]
+    fn token_css_class_variable_returns_none() {
+        assert_eq!(token_css_class(TokenKind::Variable), None);
+    }
+
+    #[test]
+    fn token_css_class_all_styled_kinds() {
+        let cases = [
+            (TokenKind::Keyword, "tok-keyword"),
+            (TokenKind::String, "tok-string"),
+            (TokenKind::Comment, "tok-comment"),
+            (TokenKind::Number, "tok-number"),
+            (TokenKind::Function, "tok-function"),
+            (TokenKind::Type, "tok-type"),
+            (TokenKind::Macro, "tok-macro"),
+            (TokenKind::Attribute, "tok-attribute"),
+            (TokenKind::Constant, "tok-constant"),
+            (TokenKind::Module, "tok-module"),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(token_css_class(kind), Some(expected), "failed for {kind:?}");
+        }
+    }
+
+    // -- highlight_line (SearchResultsTemplate) ------------------------------
+
+    #[test]
+    fn highlight_line_no_ranges() {
+        let result = SearchResultsTemplate::highlight_line("hello world", &[]);
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn highlight_line_single_range() {
+        let result = SearchResultsTemplate::highlight_line("hello world", &[(6, 11)]);
+        assert_eq!(result, "hello <mark>world</mark>");
+    }
+
+    #[test]
+    fn highlight_line_multiple_ranges() {
+        let result = SearchResultsTemplate::highlight_line("abcdef", &[(0, 2), (4, 6)]);
+        assert_eq!(result, "<mark>ab</mark>cd<mark>ef</mark>");
+    }
+
+    #[test]
+    fn highlight_line_adjacent_ranges() {
+        let result = SearchResultsTemplate::highlight_line("abcd", &[(0, 2), (2, 4)]);
+        assert_eq!(result, "<mark>ab</mark><mark>cd</mark>");
+    }
+
+    #[test]
+    fn highlight_line_escapes_html_in_content() {
+        let result = SearchResultsTemplate::highlight_line("<b>hi</b>", &[(3, 5)]);
+        assert_eq!(result, "&lt;b&gt;<mark>hi</mark>&lt;/b&gt;");
+    }
+
+    #[test]
+    fn highlight_line_range_clamped_to_content_length() {
+        let result = SearchResultsTemplate::highlight_line("abc", &[(1, 100)]);
+        assert_eq!(result, "a<mark>bc</mark>");
+    }
+
+    // -- tokenize_html -------------------------------------------------------
+
+    fn tok(len: usize, kind: TokenKind) -> Token {
+        Token { len, kind }
+    }
+
+    #[test]
+    fn tokenize_html_empty_tokens_falls_back() {
+        assert_eq!(tokenize_html("<b>", &[]), "&lt;b&gt;");
+    }
+
+    #[test]
+    fn tokenize_html_single_keyword() {
+        let tokens = [tok(2, TokenKind::Keyword)];
+        let result = tokenize_html("fn", &tokens);
+        assert_eq!(result, "<span class=\"tok-keyword\">fn</span>");
+    }
+
+    #[test]
+    fn tokenize_html_plain_token_no_span() {
+        let tokens = [tok(5, TokenKind::Plain)];
+        let result = tokenize_html("hello", &tokens);
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn tokenize_html_mixed_tokens() {
+        // "fn main" => keyword "fn", plain " ", function "main"
+        let tokens = [
+            tok(2, TokenKind::Keyword),
+            tok(1, TokenKind::Plain),
+            tok(4, TokenKind::Function),
+        ];
+        let result = tokenize_html("fn main", &tokens);
+        assert_eq!(
+            result,
+            "<span class=\"tok-keyword\">fn</span> <span class=\"tok-function\">main</span>"
+        );
+    }
+
+    #[test]
+    fn tokenize_html_tokens_shorter_than_content() {
+        let tokens = [tok(2, TokenKind::Keyword)];
+        let result = tokenize_html("fn main", &tokens);
+        assert_eq!(result, "<span class=\"tok-keyword\">fn</span> main");
+    }
+
+    #[test]
+    fn tokenize_html_escapes_within_spans() {
+        let tokens = [tok(6, TokenKind::String)];
+        let result = tokenize_html("\"a<b>\"", &tokens);
+        assert_eq!(
+            result,
+            "<span class=\"tok-string\">&quot;a&lt;b&gt;&quot;</span>"
+        );
+    }
+
+    // -- tokenize_html_with_marks --------------------------------------------
+
+    #[test]
+    fn tokenize_with_marks_no_tokens_delegates() {
+        let result = tokenize_html_with_marks("hello world", &[], &[(0, 5)]);
+        assert_eq!(result, "<mark>hello</mark> world");
+    }
+
+    #[test]
+    fn tokenize_with_marks_no_ranges_delegates() {
+        let tokens = [tok(5, TokenKind::Keyword)];
+        let result = tokenize_html_with_marks("hello", &tokens, &[]);
+        assert_eq!(result, "<span class=\"tok-keyword\">hello</span>");
+    }
+
+    #[test]
+    fn tokenize_with_marks_range_within_single_token() {
+        // "fn main()" with keyword "fn", plain " ", function "main", punct "()"
+        let tokens = [
+            tok(2, TokenKind::Keyword),
+            tok(1, TokenKind::Plain),
+            tok(4, TokenKind::Function),
+            tok(2, TokenKind::Punctuation),
+        ];
+        // Mark "main"
+        let result = tokenize_html_with_marks("fn main()", &tokens, &[(3, 7)]);
+        assert_eq!(
+            result,
+            "<span class=\"tok-keyword\">fn</span> <span class=\"tok-function\"><mark>main</mark></span>()"
+        );
+    }
+
+    #[test]
+    fn tokenize_with_marks_range_spanning_tokens() {
+        // "let x" with keyword "let", plain " ", variable "x"
+        let tokens = [
+            tok(3, TokenKind::Keyword),
+            tok(1, TokenKind::Plain),
+            tok(1, TokenKind::Variable),
+        ];
+        // Mark spans from "et" through " x" (bytes 1..5)
+        let result = tokenize_html_with_marks("let x", &tokens, &[(1, 5)]);
+        assert_eq!(
+            result,
+            "<span class=\"tok-keyword\">l<mark>et</mark></span><mark> </mark><mark>x</mark>"
+        );
+    }
+
+    #[test]
+    fn tokenize_with_marks_html_escaped_in_marks() {
+        let tokens = [tok(5, TokenKind::String)];
+        let result = tokenize_html_with_marks("a<b>c", &tokens, &[(1, 4)]);
+        assert_eq!(
+            result,
+            "<span class=\"tok-string\">a<mark>&lt;b&gt;</mark>c</span>"
+        );
+    }
+}
+
 /// GET /symbol-outline?repo=...&path=...
 pub async fn symbol_outline_fragment(
     State(state): State<AppState>,
