@@ -69,14 +69,8 @@ fn copy_fixtures(target: &Path) -> Vec<String> {
         if let Some(parent) = dst.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        fs::copy(&src, &dst).unwrap_or_else(|e| {
-            panic!(
-                "copy {} -> {}: {}",
-                src.display(),
-                dst.display(),
-                e
-            )
-        });
+        fs::copy(&src, &dst)
+            .unwrap_or_else(|e| panic!("copy {} -> {}: {}", src.display(), dst.display(), e));
     }
     FIXTURE_PATHS.iter().map(|s| s.to_string()).collect()
 }
@@ -160,8 +154,7 @@ fn test_search_no_results() {
     let mgr = build_index(tmp.path());
     let snapshot = mgr.snapshot();
 
-    let result =
-        search_segments(&snapshot, "zzz_nonexistent_string_xyz").expect("search");
+    let result = search_segments(&snapshot, "zzz_nonexistent_string_xyz").expect("search");
     assert_eq!(
         result.files.len(),
         0,
@@ -181,8 +174,7 @@ fn test_search_regex() {
 
     let query = parse_query("/def \\w+/").expect("parse regex query");
     let options = SearchOptions::default();
-    let result =
-        search_segments_with_query(&snapshot, &query, &options).expect("regex search");
+    let result = search_segments_with_query(&snapshot, &query, &options).expect("regex search");
 
     // utils.py has multiple `def ...` lines; .rs files should not match.
     let py_matches: Vec<_> = result
@@ -243,8 +235,8 @@ fn test_search_language_filter() {
 
     let query = parse_query("lang:python def").expect("parse lang filter query");
     let options = SearchOptions::default();
-    let result = search_segments_with_query(&snapshot, &query, &options)
-        .expect("language filter search");
+    let result =
+        search_segments_with_query(&snapshot, &query, &options).expect("language filter search");
 
     assert!(
         !result.files.is_empty(),
